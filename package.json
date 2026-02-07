@@ -1,0 +1,13 @@
+{
+  "name": "auth-service-backend",
+  "version": "1.0.0",
+  "description": "Auth service backend with Express.js",
+  "main": "index.js",
+  "dependencies": {
+    "express": "^4.21.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  }
+}
