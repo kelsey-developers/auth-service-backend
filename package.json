@@ -4,13 +4,14 @@
   "description": "Auth service backend with Express.js",
   "main": "index.js",
   "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
-    "bcrypt": "^5.1.1",
-    "mysql2": "^3.6.5",
-    "swagger-ui-express": "^5.0.0",
+    "pg": "^8.20.0",
     "swagger-jsdoc": "^6.2.8",
-    "cors": "^2.8.5"
+    "swagger-ui-express": "^5.0.0"
   },
   "scripts": {
     "start": "node index.js",

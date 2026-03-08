@@ -44,14 +44,14 @@ function buildSpec(port) {
           },
         },
       },
-      '/api/oauth2/login': {
+      '/api/auth/login': {
         get: {
           summary: 'User Authentication (Login)',
           tags: ['Authentication'],
           description: [
             'Authenticate user with email and password via query parameters.',
             'Returns a JWT access token for subsequent API calls.',
-            '**Usage:** GET /api/oauth2/login?email=test@example.com&password=test',
+            '**Usage:** GET /api/auth/login?email=test@example.com&password=test',
             '**Security:** For production, consider POST with body parameters.',
           ].join('\n'),
           parameters: [
@@ -122,7 +122,7 @@ function buildSpec(port) {
           },
         },
       },
-      '/api/oauth2/userinfo': {
+      '/api/auth/userinfo': {
         get: {
           summary: 'Get user information',
           tags: ['Authentication'],
@@ -138,8 +138,13 @@ function buildSpec(port) {
                     properties: {
                       id: { type: 'integer', example: 1 },
                       email: { type: 'string', format: 'email', example: 'user@example.com' },
+                      firstName: { type: 'string', example: 'Juan' },
+                      middleName: { type: 'string', example: 'Santos', nullable: true },
+                      lastName: { type: 'string', example: 'Dela Cruz' },
+                      phone: { type: 'string', example: '+639171234567', nullable: true },
+                      status: { type: 'string', example: 'active' },
+                      roles: { type: 'array', items: { type: 'string' }, example: ['Agent'] },
                       createdAt: { type: 'string', format: 'date-time' },
-                      updatedAt: { type: 'string', format: 'date-time' },
                     },
                   },
                 },

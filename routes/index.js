@@ -1,10 +1,9 @@
-const express = require('express');
-const statusRoutes = require('./statusRoutes');
-const { createAuthRouter } = require('./authRoutes');
+const authRoutes = require('./auth');
+const statusRoutes = require('./status');
 
-function mountRoutes(app, { pool, jwtSecret }) {
+function mountRoutes(app) {
   app.use('/', statusRoutes);
-  app.use('/api/oauth2', createAuthRouter(pool, jwtSecret));
+  app.use('/api/auth', authRoutes);
 }
 
 module.exports = { mountRoutes };

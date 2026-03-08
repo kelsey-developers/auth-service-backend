@@ -5,31 +5,32 @@ services:
       - "3000:3000"
     environment:
       PORT: 3000
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_USER: app_user
-      MYSQL_PASSWORD: app_password
-      MYSQL_DATABASE: auth_db
+      JWT_SECRET: your-secret-key-change-in-production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: app_user
+      DB_PASSWORD: app_password
+      DB_NAME: kelseydb
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
 
-  mysql:
-    image: mysql:8
+  postgres:
+    image: postgres:16-alpine
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: auth_db
-      MYSQL_USER: app_user
-      MYSQL_PASSWORD: app_password
+      POSTGRES_DB: kelseydb
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_password
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "pg_isready -U app_user -d kelseydb"]
       interval: 5s
       timeout: 5s
       retries: 10
 
 volumes:
-  mysql_data:
+  postgres_data:
