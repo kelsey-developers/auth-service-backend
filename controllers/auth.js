@@ -5,14 +5,14 @@ const { jwtSecret } = require('../config/config');
 
 async function login(req, res) {
   try {
-    const { email, password } = req.query;
+    const { email, password } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const { rows } = await pool.query(
-      'SELECT user_id, email, password_hash FROM app_user WHERE email = $1',
+    const [rows] = await pool.query(
+      'SELECT user_id, email, password_hash FROM app_user WHERE email = ?',
       [email]
     );
 
@@ -60,17 +60,14 @@ async function userinfo(req, res) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    const { rows } = await pool.query(
+    const [rows] = await pool.query(
       `SELECT u.user_id, u.email, u.first_name, u.middle_name, u.last_name,
               u.phone, u.status, u.created_at,
-              COALESCE(
-                json_agg(r.role_name) FILTER (WHERE r.role_name IS NOT NULL),
-                '[]'
-              ) AS roles
+              IF(COUNT(r.role_name) > 0, JSON_ARRAYAGG(r.role_name), JSON_ARRAY()) AS roles
        FROM app_user u
        LEFT JOIN user_role ur ON ur.user_id = u.user_id AND ur.status = 'active'
        LEFT JOIN role r ON r.role_id = ur.role_id
-       WHERE u.user_id = $1
+       WHERE u.user_id = ?
        GROUP BY u.user_id`,
       [decoded.userId]
     );
@@ -88,7 +85,7 @@ async function userinfo(req, res) {
       lastName: user.last_name,
       phone: user.phone,
       status: user.status,
-      roles: user.roles,
+      roles: typeof user.roles === 'string' ? JSON.parse(user.roles) : (user.roles ?? []),
       createdAt: user.created_at,
     });
   } catch (error) {

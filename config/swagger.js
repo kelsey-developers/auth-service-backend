@@ -45,31 +45,25 @@ function buildSpec(port) {
         },
       },
       '/api/auth/login': {
-        get: {
+        post: {
           summary: 'User Authentication (Login)',
           tags: ['Authentication'],
-          description: [
-            'Authenticate user with email and password via query parameters.',
-            'Returns a JWT access token for subsequent API calls.',
-            '**Usage:** GET /api/auth/login?email=test@example.com&password=test',
-            '**Security:** For production, consider POST with body parameters.',
-          ].join('\n'),
-          parameters: [
-            {
-              in: 'query',
-              name: 'email',
-              required: true,
-              schema: { type: 'string', format: 'email', example: 'test@example.com' },
-              description: "User's email address",
+          description: 'Authenticate user with email and password. Returns a JWT access token.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['email', 'password'],
+                  properties: {
+                    email: { type: 'string', format: 'email', example: 'test@example.com' },
+                    password: { type: 'string', format: 'password', example: 'secret' },
+                  },
+                },
+              },
             },
-            {
-              in: 'query',
-              name: 'password',
-              required: true,
-              schema: { type: 'string', format: 'password', example: 'test' },
-              description: "User's password",
-            },
-          ],
+          },
           responses: {
             200: {
               description: 'Login successful - Returns JWT access token',
