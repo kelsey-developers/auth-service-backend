@@ -11,6 +11,7 @@ DROP TABLE IF EXISTS payment_status_history;
 DROP TABLE IF EXISTS payment;
 DROP TABLE IF EXISTS booking_status_history;
 DROP TABLE IF EXISTS booking;
+DROP TABLE IF EXISTS unit_image;
 DROP TABLE IF EXISTS unit;
 DROP TABLE IF EXISTS user_role;
 DROP TABLE IF EXISTS role;
@@ -81,11 +82,26 @@ CREATE TABLE unit (
     unit_id               BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     unit_name             VARCHAR(150) NOT NULL,
     location              TEXT,
+    city                  VARCHAR(100),
+    country               VARCHAR(100),
+    bedroom_count         INT NOT NULL DEFAULT 0,
+    bathroom_count        INT NOT NULL DEFAULT 0,
+    area_sqm              DECIMAL(10,2),
+    unit_type             VARCHAR(50) NOT NULL DEFAULT 'apartment',
+    description           TEXT,
+    amenities             JSON,
     min_pax               INT NOT NULL,
     max_capacity          INT NOT NULL,
     base_price            DECIMAL(12,2) NOT NULL,
     excess_pax_fee        DECIMAL(12,2) NOT NULL DEFAULT 0,
     status                VARCHAR(30) NOT NULL DEFAULT 'available',
+    is_featured           TINYINT(1) NOT NULL DEFAULT 0,
+    check_in_time         VARCHAR(10),
+    check_out_time        VARCHAR(10),
+    latitude              DECIMAL(10,7),
+    longitude             DECIMAL(10,7),
+    created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     CONSTRAINT chk_unit_min_pax
         CHECK (min_pax >= 1),
@@ -97,6 +113,18 @@ CREATE TABLE unit (
         CHECK (excess_pax_fee >= 0),
     CONSTRAINT chk_unit_status
         CHECK (status IN ('available', 'unavailable', 'maintenance'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE unit_image (
+    image_id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    unit_id               BIGINT NOT NULL,
+    image_url             VARCHAR(500) NOT NULL,
+    is_main               TINYINT(1) NOT NULL DEFAULT 0,
+    sort_order            INT NOT NULL DEFAULT 0,
+
+    CONSTRAINT fk_unit_image_unit
+        FOREIGN KEY (unit_id) REFERENCES unit(unit_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
@@ -337,6 +365,14 @@ CREATE TABLE reward_redemption (
 CREATE INDEX idx_user_role_user_id ON user_role(user_id);
 CREATE INDEX idx_user_role_role_id ON user_role(role_id);
 
+CREATE INDEX idx_unit_status ON unit(status);
+CREATE INDEX idx_unit_is_featured ON unit(is_featured);
+CREATE INDEX idx_unit_unit_type ON unit(unit_type);
+CREATE INDEX idx_unit_city ON unit(city);
+
+CREATE INDEX idx_unit_image_unit_id ON unit_image(unit_id);
+CREATE INDEX idx_unit_image_is_main ON unit_image(unit_id, is_main);
+
 CREATE INDEX idx_booking_guest_user_id ON booking(guest_user_id);
 CREATE INDEX idx_booking_agent_user_id ON booking(agent_user_id);
 CREATE INDEX idx_booking_unit_id ON booking(unit_id);
@@ -365,3 +401,28 @@ CREATE INDEX idx_reward_redemption_agent_user_id ON reward_redemption(agent_user
 CREATE INDEX idx_reward_redemption_wallet_id ON reward_redemption(wallet_id);
 CREATE INDEX idx_reward_redemption_reward_id ON reward_redemption(reward_id);
 CREATE INDEX idx_reward_redemption_status ON reward_redemption(redemption_status);
+
+-- =========================
+-- SEED DATA (development)
+-- =========================
+INSERT INTO role (role_name, description) VALUES
+  ('Guest', 'Guest user'),
+  ('Agent', 'Booking agent'),
+  ('Admin', 'Administrator');
+
+INSERT INTO unit (unit_name, location, city, country, bedroom_count, bathroom_count, area_sqm, unit_type, description, amenities, min_pax, max_capacity, base_price, excess_pax_fee, status, is_featured, check_in_time, check_out_time) VALUES
+  ('Luxury Beachfront Villa', 'Boracay, Aklan', 'Boracay', 'Philippines', 4, 3, 232, 'villa', 'Experience paradise in this stunning beachfront villa with panoramic ocean views, private pool, and direct beach access.', '["Beach Access","Private Pool","WiFi","Air Conditioning","Full Kitchen"]', 2, 10, 8500, 500, 'available', 1, '14:00', '11:00'),
+  ('Modern City Condo', 'Makati, Metro Manila', 'Makati', 'Philippines', 2, 2, 111, 'condo', 'Contemporary 2-bedroom condo in the heart of Manila. Walking distance to shopping malls and restaurants.', '["WiFi","Gym Access","Pool","Parking","Security"]', 1, 4, 3500, 200, 'available', 1, '14:00', '11:00'),
+  ('Cozy Mountain Retreat', 'Tagaytay, Cavite', 'Tagaytay', 'Philippines', 3, 2, 167, 'house', 'Escape to this charming mountain cabin surrounded by nature. Features fireplace and mountain views.', '["Fireplace","Mountain View","Garden","BBQ Area","Parking"]', 2, 6, 4200, 300, 'available', 1, '15:00', '10:00'),
+  ('Apartment in Davao', 'Medina, Apilaya Davao City', 'Davao City', 'Philippines', 2, 1, 74, 'apartment', 'A beautiful apartment complex in the heart of Davao City with modern amenities.', '["WiFi","Air Conditioning","Kitchen","Parking","TV","Washing Machine"]', 1, 4, 4320, 250, 'available', 1, '14:00', '11:00');
+
+INSERT INTO unit_image (unit_id, image_url, is_main, sort_order) VALUES
+  (1, '/heroimage.png', 1, 0),
+  (1, '/heroimage.png', 0, 1),
+  (1, '/heroimage.png', 0, 2),
+  (2, '/heroimage.png', 1, 0),
+  (2, '/heroimage.png', 0, 1),
+  (3, '/heroimage.png', 1, 0),
+  (4, '/heroimage.png', 1, 0),
+  (4, '/heroimage.png', 0, 1),
+  (4, '/heroimage.png', 0, 2);
