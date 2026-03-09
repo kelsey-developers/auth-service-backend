@@ -10,6 +10,7 @@ DROP TABLE IF EXISTS agent_relationship;
 DROP TABLE IF EXISTS payment_status_history;
 DROP TABLE IF EXISTS payment;
 DROP TABLE IF EXISTS booking_status_history;
+DROP TABLE IF EXISTS guest_booking_info;
 DROP TABLE IF EXISTS booking;
 DROP TABLE IF EXISTS unit_image;
 DROP TABLE IF EXISTS unit;
@@ -100,8 +101,13 @@ CREATE TABLE unit (
     check_out_time        VARCHAR(10),
     latitude              DECIMAL(10,7),
     longitude             DECIMAL(10,7),
+    owner_user_id         BIGINT,
     created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_unit_owner
+        FOREIGN KEY (owner_user_id) REFERENCES app_user(user_id)
+        ON UPDATE CASCADE ON DELETE SET NULL,
 
     CONSTRAINT chk_unit_min_pax
         CHECK (min_pax >= 1),
@@ -128,11 +134,33 @@ CREATE TABLE unit_image (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
+-- GUEST INFORMATION (for bookings without app_user)
+-- =========================
+CREATE TABLE guest_booking_info (
+    guest_booking_info_id  BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    first_name             VARCHAR(100) NOT NULL,
+    last_name              VARCHAR(100) NOT NULL,
+    email                  VARCHAR(255) NOT NULL,
+    middle_name            VARCHAR(100),
+    nickname               VARCHAR(100),
+    contact_number         VARCHAR(50),
+    gender                 VARCHAR(20),
+    birth_date             DATE,
+    preferred_contact      VARCHAR(30),
+    referred_by            VARCHAR(255),
+    created_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_guest_booking_info_gender
+        CHECK (gender IS NULL OR gender IN ('male', 'female', 'other'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
 -- BOOKING MANAGEMENT
 -- =========================
 CREATE TABLE booking (
     booking_id             BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    guest_user_id          BIGINT NOT NULL,
+    guest_user_id          BIGINT,
+    guest_booking_info_id  BIGINT,
     unit_id                BIGINT NOT NULL,
     agent_user_id          BIGINT,
     checkin_date           DATE NOT NULL,
@@ -146,6 +174,10 @@ CREATE TABLE booking (
 
     CONSTRAINT fk_booking_guest
         FOREIGN KEY (guest_user_id) REFERENCES app_user(user_id)
+        ON UPDATE CASCADE ON DELETE RESTRICT,
+
+    CONSTRAINT fk_booking_guest_info
+        FOREIGN KEY (guest_booking_info_id) REFERENCES guest_booking_info(guest_booking_info_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
 
     CONSTRAINT fk_booking_unit
@@ -374,6 +406,7 @@ CREATE INDEX idx_unit_image_unit_id ON unit_image(unit_id);
 CREATE INDEX idx_unit_image_is_main ON unit_image(unit_id, is_main);
 
 CREATE INDEX idx_booking_guest_user_id ON booking(guest_user_id);
+CREATE INDEX idx_booking_guest_booking_info_id ON booking(guest_booking_info_id);
 CREATE INDEX idx_booking_agent_user_id ON booking(agent_user_id);
 CREATE INDEX idx_booking_unit_id ON booking(unit_id);
 CREATE INDEX idx_booking_status ON booking(booking_status);
