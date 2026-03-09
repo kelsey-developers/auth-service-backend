@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const { port } = require('./config/config');
 const { setupSwagger } = require('./config/swagger');
 const { mountRoutes } = require('./routes');
@@ -15,6 +16,7 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 setupSwagger(app, port);
 mountRoutes(app);

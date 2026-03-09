@@ -1,6 +1,11 @@
+const crypto = require('crypto');
 const pool = require('../config/db');
 
 const PH_TZ = 'Asia/Manila';
+
+function generateReferenceCode() {
+  return 'BKG-' + crypto.randomBytes(6).toString('hex').toUpperCase();
+}
 
 function toDateOnly(val) {
   if (val == null) return null;
@@ -156,11 +161,13 @@ async function createBooking(req, res) {
     // agent_user_id comes from JWT (req.user) - only Admin/Agent can create bookings
     const agentUserId = req.user ? req.user.userId : null;
 
-    await connection.query(
+    const referenceCode = generateReferenceCode();
+    const [bookingResult] = await connection.query(
       `INSERT INTO booking
-       (guest_user_id, guest_booking_info_id, unit_id, agent_user_id, checkin_date, checkout_date, pax, booking_status, penciled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'penciled', NOW())`,
+       (reference_code, guest_user_id, guest_booking_info_id, unit_id, agent_user_id, checkin_date, checkout_date, pax, booking_status, penciled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'penciled', NOW())`,
       [
+        referenceCode,
         guestUserId,
         guestBookingInfoId,
         unitId,
@@ -170,11 +177,7 @@ async function createBooking(req, res) {
         pax,
       ]
     );
-
-    const [insertResult] = await connection.query(
-      `SELECT LAST_INSERT_ID() AS id`
-    );
-    const bookingId = insertResult[0].id;
+    const bookingId = bookingResult.insertId;
 
     // Insert payment record for the booking (cash, bank_transfer, etc.)
     // totalAmount is calculated server-side above, never from client
@@ -190,6 +193,7 @@ async function createBooking(req, res) {
     res.status(201).json({
       id: String(bookingId),
       booking_id: bookingId,
+      reference_code: referenceCode,
       check_in_date: checkIn,
       check_out_date: checkOut,
       num_guests: pax,
@@ -207,29 +211,29 @@ async function createBooking(req, res) {
 }
 
 /**
- * GET /api/bookings/:id
- * Get a single booking by ID. Only the assigned agent (or Admin) can view.
+ * GET /api/bookings/:idOrRef
+ * Get a single booking by ID. Authenticated: agent or Admin can view. Unauthenticated: anyone can view (for guest confirmation links).
+ * Accepts numeric id or reference_code (e.g. BKG-A7X9K2M1B4C5).
  */
 async function getBookingById(req, res) {
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
     const roles = req.user?.roles || [];
-
-    if (!userId) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
     const isAdmin = roles.includes('Admin');
-    const bookingId = parseInt(id, 10);
-    if (!Number.isFinite(bookingId)) {
-      return res.status(400).json({ error: 'Invalid booking ID' });
+
+    const isRef = typeof id === 'string' && /^BKG-[A-Z0-9]+$/i.test(id);
+    const whereClause = isRef ? 'b.reference_code = ?' : 'b.booking_id = ?';
+    const whereVal = isRef ? id : parseInt(id, 10);
+
+    if (!isRef && !Number.isFinite(whereVal)) {
+      return res.status(400).json({ error: 'Invalid booking ID or reference' });
     }
 
     const [rows] = await pool.query(
-      `SELECT b.booking_id, b.guest_user_id, b.guest_booking_info_id, b.unit_id, b.agent_user_id,
+      `SELECT b.booking_id, b.reference_code, b.guest_user_id, b.guest_booking_info_id, b.unit_id, b.agent_user_id,
               b.checkin_date, b.checkout_date, b.pax, b.booking_status, b.created_at,
-              u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.check_in_time, u.check_out_time,
+              u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.min_pax, u.check_in_time, u.check_out_time,
               u.latitude, u.longitude, u.unit_type,
               (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
               g.first_name AS guest_first_name, g.last_name AS guest_last_name, g.email AS guest_email, g.contact_number AS guest_contact,
@@ -242,8 +246,8 @@ async function getBookingById(req, res) {
        LEFT JOIN app_user gu ON gu.user_id = b.guest_user_id
        LEFT JOIN app_user a ON a.user_id = b.agent_user_id
        LEFT JOIN payment p ON p.booking_id = b.booking_id
-       WHERE b.booking_id = ?`,
-      [bookingId]
+       WHERE ${whereClause}`,
+      [whereVal]
     );
 
     if (rows.length === 0) {
@@ -252,9 +256,9 @@ async function getBookingById(req, res) {
 
     const row = rows[0];
 
-    // Only the assigned agent or Admin can view
+    // When authenticated: only assigned agent or Admin can view. When unauthenticated: allow (guest confirmation link).
     const agentUserId = row.agent_user_id ? Number(row.agent_user_id) : null;
-    if (!isAdmin && agentUserId !== userId) {
+    if (userId && !isAdmin && agentUserId !== userId) {
       return res.status(403).json({ error: 'You do not have access to this booking' });
     }
 
@@ -264,8 +268,15 @@ async function getBookingById(req, res) {
       ? Math.max(0, Math.round((new Date(checkOut) - new Date(checkIn)) / (24 * 60 * 60 * 1000)))
       : 0;
 
-    const unitCharge = Number(row.base_price) || 0;
-    const totalAmount = unitCharge * Math.max(1, nights);
+    const basePricePerNight = Number(row.base_price) || 0;
+    const excessPaxFee = Number(row.excess_pax_fee) || 0;
+    const minPax = parseInt(row.min_pax, 10) || 1;
+    const pax = parseInt(row.pax, 10) || 1;
+    const guestsAboveMinPax = Math.max(0, pax - minPax);
+    const baseTotal = basePricePerNight * Math.max(1, nights);
+    const extraGuestFees = guestsAboveMinPax * excessPaxFee * Math.max(1, nights);
+    const SERVICE_CHARGE = 100;
+    const totalAmount = baseTotal + extraGuestFees + SERVICE_CHARGE;
 
     const agentFullname = row.agent_first_name || row.agent_last_name
       ? [row.agent_first_name, row.agent_middle_name, row.agent_last_name].filter(Boolean).join(' ')
@@ -277,17 +288,21 @@ async function getBookingById(req, res) {
     const clientEmail = row.guest_email || row.app_guest_email || '';
     const clientContact = row.guest_contact || row.app_guest_phone || '';
 
+    const referenceCode = row.reference_code || `BKG-${String(row.booking_id).padStart(6, '0')}`;
+
     const booking = {
       id: String(row.booking_id),
+      reference_code: referenceCode,
       listing_id: String(row.unit_id),
       check_in_date: checkIn,
       check_out_date: checkOut,
       nights,
-      num_guests: row.pax || 1,
-      extra_guests: 0,
-      unit_charge: unitCharge,
+      num_guests: pax,
+      extra_guests: guestsAboveMinPax,
+      extra_guest_charge: extraGuestFees,
+      unit_charge: basePricePerNight,
       amenities_charge: 0,
-      service_charge: 0,
+      service_charge: SERVICE_CHARGE,
       discount: 0,
       total_amount: totalAmount,
       currency: 'PHP',
@@ -333,6 +348,72 @@ async function getBookingById(req, res) {
   }
 }
 
+/**
+ * GET /api/bookings/my
+ * List bookings where agent_user_id = current user. Requires auth.
+ */
+async function getMyBookings(req, res) {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status,
+              u.unit_name, u.location, u.base_price,
+              (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
+              g.first_name AS guest_first_name, g.last_name AS guest_last_name,
+              p.payment_id, p.payment_status, p.deposit_amount
+       FROM booking b
+       JOIN unit u ON u.unit_id = b.unit_id
+       LEFT JOIN guest_booking_info g ON g.guest_booking_info_id = b.guest_booking_info_id
+       LEFT JOIN payment p ON p.booking_id = b.booking_id
+       WHERE b.agent_user_id = ?
+       ORDER BY b.checkin_date DESC`,
+      [userId]
+    );
+
+    const bookings = rows.map((r) => {
+      const checkIn = r.checkin_date;
+      const checkOut = r.checkout_date;
+      const nights = checkIn && checkOut
+        ? Math.max(0, Math.round((new Date(checkOut) - new Date(checkIn)) / (24 * 60 * 60 * 1000)))
+        : 0;
+      const basePrice = Number(r.base_price) || 0;
+      const totalAmount = r.deposit_amount ? Number(r.deposit_amount) : Math.round(basePrice * Math.max(1, nights));
+
+      return {
+        id: String(r.booking_id),
+        reference_code: r.reference_code || `BKG-${String(r.booking_id).padStart(6, '0')}`,
+        check_in_date: toDateOnly(checkIn) || checkIn,
+        check_out_date: toDateOnly(checkOut) || checkOut,
+        status: mapBookingStatus(r.booking_status),
+        total_amount: totalAmount,
+        transaction_number: r.payment_id ? `TXN-${r.payment_id}` : '',
+        listing: {
+          title: r.unit_name || '',
+          location: r.location || '',
+          main_image_url: r.main_image_url || '/heroimage.png',
+        },
+        client: {
+          first_name: r.guest_first_name || '',
+          last_name: r.guest_last_name || '',
+        },
+        payment: r.payment_id ? {
+          reference_number: `TXN-${r.payment_id}`,
+          status: r.payment_status || 'pending',
+        } : null,
+      };
+    });
+
+    res.json(bookings);
+  } catch (error) {
+    console.error('Get my bookings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 function mapBookingStatus(dbStatus) {
   const map = {
     penciled: 'pending',
@@ -354,4 +435,4 @@ function mapPaymentMethod(method) {
   return map[method] || 'other';
 }
 
-module.exports = { getBookings, getBookingById, createBooking };
+module.exports = { getBookings, getMyBookings, getBookingById, createBooking };
