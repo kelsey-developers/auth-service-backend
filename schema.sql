@@ -2,10 +2,6 @@
 -- OPTIONAL: CLEAN DROP ORDER
 -- =========================
 SET FOREIGN_KEY_CHECKS = 0;
-DROP TABLE IF EXISTS reward_redemption;
-DROP TABLE IF EXISTS reward;
-DROP TABLE IF EXISTS point_transaction;
-DROP TABLE IF EXISTS point_wallet;
 DROP TABLE IF EXISTS agent_relationship;
 DROP TABLE IF EXISTS payment_status_history;
 DROP TABLE IF EXISTS payment;
@@ -16,26 +12,33 @@ DROP TABLE IF EXISTS unit_image;
 DROP TABLE IF EXISTS unit;
 DROP TABLE IF EXISTS user_role;
 DROP TABLE IF EXISTS role;
-DROP TABLE IF EXISTS app_user;
+DROP TABLE IF EXISTS `user`;
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- =========================
 -- USERS
 -- =========================
-CREATE TABLE app_user (
+CREATE TABLE `user` (
     user_id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     first_name           VARCHAR(100) NOT NULL,
     middle_name          VARCHAR(100),
     last_name            VARCHAR(100) NOT NULL,
     email                VARCHAR(255) NOT NULL UNIQUE,
     phone                VARCHAR(50),
-    address              TEXT,
+    street               VARCHAR(255),
+    barangay             VARCHAR(100),
+    city                 VARCHAR(100),
+    zip_code             VARCHAR(20),
+    gender               VARCHAR(30),
+    birth_date           DATE,
     password_hash        TEXT NOT NULL,
     status               VARCHAR(30) NOT NULL DEFAULT 'active',
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT chk_app_user_status
-        CHECK (status IN ('active', 'inactive', 'suspended'))
+    CONSTRAINT chk_user_status
+        CHECK (status IN ('active', 'inactive', 'suspended')),
+    CONSTRAINT chk_user_gender
+        CHECK (gender IS NULL OR gender IN ('male', 'female', 'non-binary', 'other', 'prefer_not_to_say'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
@@ -62,7 +65,7 @@ CREATE TABLE user_role (
     status               VARCHAR(30) NOT NULL DEFAULT 'active',
 
     CONSTRAINT fk_user_role_user
-        FOREIGN KEY (user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE CASCADE,
 
     CONSTRAINT fk_user_role_role
@@ -106,7 +109,7 @@ CREATE TABLE unit (
     updated_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_unit_owner
-        FOREIGN KEY (owner_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (owner_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE SET NULL,
 
     CONSTRAINT chk_unit_min_pax
@@ -134,7 +137,7 @@ CREATE TABLE unit_image (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
--- GUEST INFORMATION (for bookings without app_user)
+-- GUEST INFORMATION (for bookings without a registered user)
 -- =========================
 CREATE TABLE guest_booking_info (
     guest_booking_info_id  BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -159,6 +162,7 @@ CREATE TABLE guest_booking_info (
 -- =========================
 CREATE TABLE booking (
     booking_id             BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    reference_code         VARCHAR(20) NULL UNIQUE,
     guest_user_id          BIGINT,
     guest_booking_info_id  BIGINT,
     unit_id                BIGINT NOT NULL,
@@ -173,7 +177,7 @@ CREATE TABLE booking (
     created_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_booking_guest
-        FOREIGN KEY (guest_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (guest_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
 
     CONSTRAINT fk_booking_guest_info
@@ -185,11 +189,11 @@ CREATE TABLE booking (
         ON UPDATE CASCADE ON DELETE RESTRICT,
 
     CONSTRAINT fk_booking_agent
-        FOREIGN KEY (agent_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (agent_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE SET NULL,
 
     CONSTRAINT fk_booking_confirmed_by
-        FOREIGN KEY (confirmed_by_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (confirmed_by_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE SET NULL,
 
     CONSTRAINT chk_booking_dates
@@ -214,7 +218,7 @@ CREATE TABLE booking_status_history (
         ON UPDATE CASCADE ON DELETE CASCADE,
 
     CONSTRAINT fk_booking_status_history_changed_by
-        FOREIGN KEY (changed_by_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (changed_by_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
 
     CONSTRAINT chk_booking_status_history_from
@@ -242,7 +246,7 @@ CREATE TABLE payment (
         ON UPDATE CASCADE ON DELETE CASCADE,
 
     CONSTRAINT fk_payment_verified_by
-        FOREIGN KEY (verified_by_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (verified_by_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE SET NULL,
 
     CONSTRAINT chk_payment_amount
@@ -267,7 +271,7 @@ CREATE TABLE payment_status_history (
         ON UPDATE CASCADE ON DELETE CASCADE,
 
     CONSTRAINT fk_payment_status_history_changed_by
-        FOREIGN KEY (changed_by_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (changed_by_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
 
     CONSTRAINT chk_payment_status_history_from
@@ -287,11 +291,11 @@ CREATE TABLE agent_relationship (
     created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_agent_relationship_parent
-        FOREIGN KEY (parent_agent_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (parent_agent_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE CASCADE,
 
     CONSTRAINT fk_agent_relationship_child
-        FOREIGN KEY (child_agent_user_id) REFERENCES app_user(user_id)
+        FOREIGN KEY (child_agent_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE CASCADE,
 
     CONSTRAINT uq_agent_relationship_pair
@@ -301,95 +305,6 @@ CREATE TABLE agent_relationship (
         CHECK (level >= 1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- =========================
--- POINT SYSTEM
--- =========================
-CREATE TABLE point_wallet (
-    wallet_id               BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    agent_user_id           BIGINT NOT NULL UNIQUE,
-    current_points          INT NOT NULL DEFAULT 0,
-    updated_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-
-    CONSTRAINT fk_point_wallet_agent
-        FOREIGN KEY (agent_user_id) REFERENCES app_user(user_id)
-        ON UPDATE CASCADE ON DELETE CASCADE,
-
-    CONSTRAINT chk_point_wallet_current_points
-        CHECK (current_points >= 0)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE point_transaction (
-    point_txn_id            BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    wallet_id               BIGINT NOT NULL,
-    booking_id              BIGINT,
-    points                  INT NOT NULL,
-    txn_type                VARCHAR(30) NOT NULL,
-    txn_status              VARCHAR(30) NOT NULL DEFAULT 'posted',
-    created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT fk_point_transaction_wallet
-        FOREIGN KEY (wallet_id) REFERENCES point_wallet(wallet_id)
-        ON UPDATE CASCADE ON DELETE CASCADE,
-
-    CONSTRAINT fk_point_transaction_booking
-        FOREIGN KEY (booking_id) REFERENCES booking(booking_id)
-        ON UPDATE CASCADE ON DELETE SET NULL,
-
-    CONSTRAINT chk_point_transaction_type
-        CHECK (txn_type IN ('earn', 'redeem', 'adjustment', 'reversal')),
-    CONSTRAINT chk_point_transaction_status
-        CHECK (txn_status IN ('pending', 'posted', 'cancelled'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE reward (
-    reward_id               BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    reward_name             VARCHAR(150) NOT NULL,
-    reward_type             VARCHAR(50) NOT NULL,
-    point_cost              INT NOT NULL,
-    stock_qty               INT NOT NULL DEFAULT 0,
-    status                  VARCHAR(30) NOT NULL DEFAULT 'active',
-
-    CONSTRAINT chk_reward_point_cost
-        CHECK (point_cost > 0),
-    CONSTRAINT chk_reward_stock_qty
-        CHECK (stock_qty >= 0),
-    CONSTRAINT chk_reward_status
-        CHECK (status IN ('active', 'inactive', 'out_of_stock'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE reward_redemption (
-    redemption_id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    reward_id               BIGINT NOT NULL,
-    agent_user_id           BIGINT NOT NULL,
-    wallet_id               BIGINT NOT NULL,
-    points_used             INT NOT NULL,
-    redemption_status       VARCHAR(30) NOT NULL DEFAULT 'requested',
-    requested_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    approved_at             TIMESTAMP NULL,
-    approved_by_user_id     BIGINT,
-    issued_at               TIMESTAMP NULL,
-
-    CONSTRAINT fk_reward_redemption_reward
-        FOREIGN KEY (reward_id) REFERENCES reward(reward_id)
-        ON UPDATE CASCADE ON DELETE RESTRICT,
-
-    CONSTRAINT fk_reward_redemption_agent
-        FOREIGN KEY (agent_user_id) REFERENCES app_user(user_id)
-        ON UPDATE CASCADE ON DELETE RESTRICT,
-
-    CONSTRAINT fk_reward_redemption_wallet
-        FOREIGN KEY (wallet_id) REFERENCES point_wallet(wallet_id)
-        ON UPDATE CASCADE ON DELETE RESTRICT,
-
-    CONSTRAINT fk_reward_redemption_approved_by
-        FOREIGN KEY (approved_by_user_id) REFERENCES app_user(user_id)
-        ON UPDATE CASCADE ON DELETE SET NULL,
-
-    CONSTRAINT chk_reward_redemption_points_used
-        CHECK (points_used > 0),
-    CONSTRAINT chk_reward_redemption_status
-        CHECK (redemption_status IN ('requested', 'approved', 'rejected', 'issued', 'cancelled'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
 -- INDEXES
@@ -424,16 +339,6 @@ CREATE INDEX idx_payment_status_history_changed_by ON payment_status_history(cha
 CREATE INDEX idx_agent_relationship_parent ON agent_relationship(parent_agent_user_id);
 CREATE INDEX idx_agent_relationship_child ON agent_relationship(child_agent_user_id);
 
-CREATE INDEX idx_point_transaction_wallet_id ON point_transaction(wallet_id);
-CREATE INDEX idx_point_transaction_booking_id ON point_transaction(booking_id);
-CREATE INDEX idx_point_transaction_status ON point_transaction(txn_status);
-
-CREATE INDEX idx_reward_status ON reward(status);
-
-CREATE INDEX idx_reward_redemption_agent_user_id ON reward_redemption(agent_user_id);
-CREATE INDEX idx_reward_redemption_wallet_id ON reward_redemption(wallet_id);
-CREATE INDEX idx_reward_redemption_reward_id ON reward_redemption(reward_id);
-CREATE INDEX idx_reward_redemption_status ON reward_redemption(redemption_status);
 
 -- =========================
 -- SEED DATA (development)

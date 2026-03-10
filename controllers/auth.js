@@ -3,6 +3,118 @@ const bcrypt = require('bcrypt');
 const pool = require('../config/db');
 const { jwtSecret } = require('../config/config');
 
+async function register(req, res) {
+  try {
+    const {
+      firstName,
+      lastName,
+      email,
+      password,
+      phone,
+      gender,
+      birthDate,
+      street,
+      barangay,
+      city,
+      zipCode,
+    } = req.body;
+
+    if (!firstName || !lastName || !email || !password) {
+      return res.status(400).json({ error: 'First name, last name, email, and password are required' });
+    }
+
+    const firstNameTrimmed = String(firstName).trim();
+    const lastNameTrimmed  = String(lastName).trim();
+    const emailTrimmed     = String(email).trim().toLowerCase();
+    const passwordStr      = String(password);
+
+    if (firstNameTrimmed.length < 2 || firstNameTrimmed.length > 100) {
+      return res.status(400).json({ error: 'First name must be between 2 and 100 characters' });
+    }
+    if (!/^[\p{L}\s'\-]+$/u.test(firstNameTrimmed)) {
+      return res.status(400).json({ error: 'First name contains invalid characters' });
+    }
+
+    if (lastNameTrimmed.length < 2 || lastNameTrimmed.length > 100) {
+      return res.status(400).json({ error: 'Last name must be between 2 and 100 characters' });
+    }
+    if (!/^[\p{L}\s'\-]+$/u.test(lastNameTrimmed)) {
+      return res.status(400).json({ error: 'Last name contains invalid characters' });
+    }
+
+    if (emailTrimmed.length > 255) {
+      return res.status(400).json({ error: 'Email address is too long' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    if (passwordStr.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    if (passwordStr.length > 128) {
+      return res.status(400).json({ error: 'Password must not exceed 128 characters' });
+    }
+    if (!/[A-Z]/.test(passwordStr)) {
+      return res.status(400).json({ error: 'Password must contain at least one uppercase letter' });
+    }
+    if (!/[a-z]/.test(passwordStr)) {
+      return res.status(400).json({ error: 'Password must contain at least one lowercase letter' });
+    }
+    if (!/[0-9]/.test(passwordStr)) {
+      return res.status(400).json({ error: 'Password must contain at least one number' });
+    }
+
+    const [existing] = await pool.query(
+      'SELECT user_id FROM `user` WHERE email = ?',
+      [emailTrimmed]
+    );
+
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'An account with this email already exists' });
+    }
+
+    const passwordHash = await bcrypt.hash(passwordStr, 10);
+
+    const [result] = await pool.query(
+      `INSERT INTO \`user\`
+        (first_name, last_name, email, password_hash, phone, gender, birth_date, street, barangay, city, zip_code)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        firstNameTrimmed,
+        lastNameTrimmed,
+        emailTrimmed,
+        passwordHash,
+        phone || null,
+        gender || null,
+        birthDate || null,
+        street || null,
+        barangay || null,
+        city || null,
+        zipCode || null,
+      ]
+    );
+
+    const userId = result.insertId;
+
+    // Assign Guest role
+    const [roleRows] = await pool.query(
+      "SELECT role_id FROM role WHERE role_name = 'Guest'",
+    );
+    if (roleRows.length > 0) {
+      await pool.query(
+        'INSERT INTO user_role (user_id, role_id) VALUES (?, ?)',
+        [userId, roleRows[0].role_id]
+      );
+    }
+
+    res.status(201).json({ message: 'Account created successfully' });
+  } catch (error) {
+    console.error('Register error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 async function login(req, res) {
   try {
     const { email, password } = req.body;
@@ -12,7 +124,7 @@ async function login(req, res) {
     }
 
     const [rows] = await pool.query(
-      'SELECT user_id, email, password_hash FROM app_user WHERE email = ?',
+      'SELECT user_id, email, password_hash FROM `user` WHERE email = ?',
       [email]
     );
 
@@ -64,7 +176,7 @@ async function userinfo(req, res) {
       `SELECT u.user_id, u.email, u.first_name, u.middle_name, u.last_name,
               u.phone, u.status, u.created_at,
               IF(COUNT(r.role_name) > 0, JSON_ARRAYAGG(r.role_name), JSON_ARRAY()) AS roles
-       FROM app_user u
+       FROM \`user\` u
        LEFT JOIN user_role ur ON ur.user_id = u.user_id AND ur.status = 'active'
        LEFT JOIN role r ON r.role_id = ur.role_id
        WHERE u.user_id = ?
@@ -94,4 +206,4 @@ async function userinfo(req, res) {
   }
 }
 
-module.exports = { login, userinfo };
+module.exports = { register, login, userinfo };

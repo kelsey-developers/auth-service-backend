@@ -28,7 +28,7 @@ ALTER TABLE booking ADD COLUMN guest_booking_info_id BIGINT NULL AFTER guest_use
 ALTER TABLE booking DROP FOREIGN KEY fk_booking_guest;
 ALTER TABLE booking MODIFY COLUMN guest_user_id BIGINT NULL;
 ALTER TABLE booking ADD CONSTRAINT fk_booking_guest
-    FOREIGN KEY (guest_user_id) REFERENCES app_user(user_id)
+    FOREIGN KEY (guest_user_id) REFERENCES `user`(user_id)
     ON UPDATE CASCADE ON DELETE RESTRICT;
 
 -- 4. Add FK for guest_booking_info (skip if constraint exists)

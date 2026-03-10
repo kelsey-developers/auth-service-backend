@@ -8,7 +8,7 @@ ALTER TABLE unit ADD COLUMN owner_user_id BIGINT NULL AFTER longitude;
 
 -- Add foreign key
 ALTER TABLE unit ADD CONSTRAINT fk_unit_owner
-    FOREIGN KEY (owner_user_id) REFERENCES app_user(user_id)
+    FOREIGN KEY (owner_user_id) REFERENCES `user`(user_id)
     ON UPDATE CASCADE ON DELETE SET NULL;
 
 -- Optional: Assign all units to first Agent user (uncomment and run if needed)

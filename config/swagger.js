@@ -1,7 +1,7 @@
 const swaggerUi = require('swagger-ui-express');
 
 function buildSpec(port) {
-  const serverUrl = `http://localhost:${port}`;
+  const serverUrl = process.env.PUBLIC_URL || `http://localhost:${port}`;
   return {
     openapi: '3.0.0',
     info: {
@@ -10,7 +10,7 @@ function buildSpec(port) {
       description: 'Authentication, units, and bookings API with JWT tokens',
       contact: { name: 'API Support' },
     },
-    servers: [{ url: serverUrl, description: 'Development server' }],
+    servers: [{ url: serverUrl, description: process.env.PUBLIC_URL ? 'Live server' : 'Local development' }],
     components: {
       securitySchemes: {
         bearerAuth: {
@@ -37,6 +37,85 @@ function buildSpec(port) {
                       service: { type: 'string', example: 'auth-service-backend' },
                       timestamp: { type: 'string', format: 'date-time' },
                     },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/api/auth/register': {
+        post: {
+          summary: 'Register a new user account',
+          tags: ['Authentication'],
+          description: 'Create a new guest user account. Returns 201 on success. Automatically assigns the Guest role.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['firstName', 'lastName', 'email', 'password'],
+                  properties: {
+                    firstName:  { type: 'string', minLength: 2, maxLength: 100, example: 'Juan' },
+                    lastName:   { type: 'string', minLength: 2, maxLength: 100, example: 'Dela Cruz' },
+                    email:      { type: 'string', format: 'email', example: 'juan@example.com' },
+                    password:   { type: 'string', minLength: 8, maxLength: 128, description: 'Min 8 chars, must include uppercase, lowercase, and number', example: 'Secret123' },
+                    phone:      { type: 'string', example: '+639171234567', nullable: true },
+                    gender:     { type: 'string', enum: ['male', 'female', 'non-binary', 'other', 'prefer_not_to_say'], nullable: true },
+                    birthDate:  { type: 'string', format: 'date', example: '1995-06-15', nullable: true },
+                    street:     { type: 'string', example: '123 Rizal St', nullable: true },
+                    barangay:   { type: 'string', example: 'Poblacion', nullable: true },
+                    city:       { type: 'string', example: 'Davao City', nullable: true },
+                    zipCode:    { type: 'string', example: '8000', nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Account created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Account created successfully' },
+                    },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation error — missing required fields or invalid format',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { error: { type: 'string', example: 'Password must contain at least one uppercase letter' } },
+                  },
+                },
+              },
+            },
+            409: {
+              description: 'Conflict — email already registered',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { error: { type: 'string', example: 'An account with this email already exists' } },
+                  },
+                },
+              },
+            },
+            500: {
+              description: 'Internal server error',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { error: { type: 'string', example: 'Internal server error' } },
                   },
                 },
               },

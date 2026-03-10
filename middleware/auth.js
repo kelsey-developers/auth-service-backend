@@ -30,7 +30,7 @@ async function requireAuth(req, res, next) {
     [rows] = await pool.query(
       `SELECT u.user_id, u.email,
               IF(COUNT(r.role_name) > 0, JSON_ARRAYAGG(r.role_name), JSON_ARRAY()) AS roles
-       FROM app_user u
+       FROM \`user\` u
        LEFT JOIN user_role ur ON ur.user_id = u.user_id AND ur.status = 'active'
        LEFT JOIN role r ON r.role_id = ur.role_id
        WHERE u.user_id = ?
@@ -110,7 +110,7 @@ async function optionalAuth(req, res, next) {
     [rows] = await pool.query(
       `SELECT u.user_id, u.email,
               IF(COUNT(r.role_name) > 0, JSON_ARRAYAGG(r.role_name), JSON_ARRAY()) AS roles
-       FROM app_user u
+       FROM \`user\` u
        LEFT JOIN user_role ur ON ur.user_id = u.user_id AND ur.status = 'active'
        LEFT JOIN role r ON r.role_id = ur.role_id
        WHERE u.user_id = ?

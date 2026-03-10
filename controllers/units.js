@@ -176,7 +176,7 @@ async function listUnitsForManage(req, res) {
              o.first_name AS owner_first_name, o.last_name AS owner_last_name, o.email AS owner_email,
              (SELECT COUNT(*) FROM booking b WHERE b.unit_id = u.unit_id AND b.booking_status IN ('penciled', 'confirmed')) AS bookings_count
       FROM unit u
-      LEFT JOIN app_user o ON o.user_id = u.owner_user_id
+      LEFT JOIN user o ON o.user_id = u.owner_user_id
       WHERE 1=1
     `;
     const params = [];

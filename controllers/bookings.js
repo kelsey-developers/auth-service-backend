@@ -243,8 +243,8 @@ async function getBookingById(req, res) {
        FROM booking b
        JOIN unit u ON u.unit_id = b.unit_id
        LEFT JOIN guest_booking_info g ON g.guest_booking_info_id = b.guest_booking_info_id
-       LEFT JOIN app_user gu ON gu.user_id = b.guest_user_id
-       LEFT JOIN app_user a ON a.user_id = b.agent_user_id
+       LEFT JOIN user gu ON gu.user_id = b.guest_user_id
+       LEFT JOIN user a ON a.user_id = b.agent_user_id
        LEFT JOIN payment p ON p.booking_id = b.booking_id
        WHERE ${whereClause}`,
       [whereVal]
@@ -282,7 +282,7 @@ async function getBookingById(req, res) {
       ? [row.agent_first_name, row.agent_middle_name, row.agent_last_name].filter(Boolean).join(' ')
       : '';
 
-    // Client from guest_booking_info or app_user (guest_user_id)
+    // Client from guest_booking_info or user (guest_user_id)
     const clientFirst = row.guest_first_name || row.app_guest_first_name || '';
     const clientLast = row.guest_last_name || row.app_guest_last_name || '';
     const clientEmail = row.guest_email || row.app_guest_email || '';
