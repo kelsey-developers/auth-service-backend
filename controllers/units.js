@@ -129,6 +129,9 @@ async function getUnitById(req, res) {
       amenities: parseJsonArray(r.amenities) || [],
       is_available: r.status === 'available',
       is_featured: Boolean(r.is_featured),
+      min_pax: r.min_pax ? Number(r.min_pax) : 1,
+      max_capacity: r.max_capacity ? Number(r.max_capacity) : null,
+      excess_pax_fee: r.excess_pax_fee != null ? Number(r.excess_pax_fee) : 0,
       latitude: r.latitude ? Number(r.latitude) : null,
       longitude: r.longitude ? Number(r.longitude) : null,
       check_in_time: r.check_in_time,
@@ -229,6 +232,160 @@ async function listUnitsForManage(req, res) {
     res.json(units);
   } catch (error) {
     console.error('List units for manage error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * PUT /api/units/:id
+ * Full update of unit (all fields + images). Requires auth.
+ * Admin: can update any. Agent: only units they own.
+ */
+async function updateUnitFull(req, res) {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const userId = req.user?.userId;
+    const roles = req.user?.roles || [];
+
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const isAdmin = roles.includes('Admin');
+    const isAgent = roles.includes('Agent');
+    if (!isAdmin && !isAgent) return res.status(403).json({ error: 'Admin or Agent role required' });
+
+    const unitId = parseInt(id, 10);
+    if (!Number.isFinite(unitId)) return res.status(400).json({ error: 'Invalid unit ID' });
+
+    const [existing] = await pool.query(
+      'SELECT unit_id, owner_user_id FROM unit WHERE unit_id = ?',
+      [unitId]
+    );
+    if (existing.length === 0) return res.status(404).json({ error: 'Unit not found' });
+
+    const unit = existing[0];
+    if (!isAdmin && unit.owner_user_id !== userId) {
+      return res.status(403).json({ error: 'You can only update units you own' });
+    }
+
+    const unit_name = body.unit_name != null ? String(body.unit_name).trim() : null;
+    if (!unit_name || unit_name.length > 150)
+      return res.status(400).json({ error: 'unit_name is required and must be 150 chars or fewer' });
+
+    const parsedMinPax = parseInt(body.min_pax, 10);
+    if (!Number.isFinite(parsedMinPax) || parsedMinPax < 1)
+      return res.status(400).json({ error: 'min_pax must be an integer >= 1' });
+
+    const parsedMaxCap = parseInt(body.max_capacity, 10);
+    if (!Number.isFinite(parsedMaxCap) || parsedMaxCap < parsedMinPax)
+      return res.status(400).json({ error: 'max_capacity must be an integer >= min_pax' });
+
+    const parsedBasePrice = parseFloat(body.base_price);
+    if (!Number.isFinite(parsedBasePrice) || parsedBasePrice < 0)
+      return res.status(400).json({ error: 'base_price must be a non-negative number' });
+
+    const location = body.location != null ? String(body.location) : null;
+    const city = body.city != null ? String(body.city) : null;
+    const country = body.country != null ? String(body.country) : null;
+    const bedroomCount = body.bedroom_count != null ? parseInt(body.bedroom_count, 10) : 0;
+    const bathroomCount = body.bathroom_count != null ? parseInt(body.bathroom_count, 10) : 0;
+    const areaSqm = body.area_sqm != null ? parseFloat(body.area_sqm) : null;
+    const allowedTypes = ['apartment', 'condo', 'villa', 'house', 'studio', 'townhouse', 'cabin', 'penthouse', 'duplex', 'other'];
+    const unitType = body.unit_type != null ? String(body.unit_type).toLowerCase() : 'apartment';
+    if (!allowedTypes.includes(unitType))
+      return res.status(400).json({ error: `unit_type must be one of: ${allowedTypes.join(', ')}` });
+    const description = body.description != null ? String(body.description) : null;
+    let amenities = null;
+    if (body.amenities != null) {
+      if (!Array.isArray(body.amenities)) return res.status(400).json({ error: 'amenities must be an array' });
+      amenities = JSON.stringify(body.amenities.map(String));
+    }
+    const excessPaxFee = body.excess_pax_fee != null ? parseFloat(body.excess_pax_fee) : 0;
+    const checkInTime = body.check_in_time != null ? String(body.check_in_time) : null;
+    const checkOutTime = body.check_out_time != null ? String(body.check_out_time) : null;
+    const latitude = body.latitude != null ? parseFloat(body.latitude) : null;
+    const longitude = body.longitude != null ? parseFloat(body.longitude) : null;
+
+    const images = Array.isArray(body.images) ? body.images : [];
+    for (const img of images) {
+      if (typeof img.url !== 'string' || !img.url.trim())
+        return res.status(400).json({ error: 'Each image must have a non-empty url string' });
+    }
+
+    await pool.query(
+      `UPDATE unit SET
+        unit_name=?, location=?, city=?, country=?, bedroom_count=?, bathroom_count=?,
+        area_sqm=?, unit_type=?, description=?, amenities=?, min_pax=?, max_capacity=?,
+        base_price=?, excess_pax_fee=?, check_in_time=?, check_out_time=?,
+        latitude=?, longitude=?
+       WHERE unit_id=?`,
+      [
+        unit_name, location, city, country, bedroomCount, bathroomCount,
+        areaSqm, unitType, description, amenities, parsedMinPax, parsedMaxCap,
+        parsedBasePrice, excessPaxFee, checkInTime, checkOutTime,
+        latitude, longitude, unitId,
+      ]
+    );
+
+    await pool.query('DELETE FROM unit_image WHERE unit_id = ?', [unitId]);
+
+    if (images.length > 0) {
+      const imgValues = images.map((img, idx) => [
+        unitId, img.url.trim(), img.is_main ? 1 : 0,
+        img.sort_order != null ? parseInt(img.sort_order, 10) : idx,
+      ]);
+      await pool.query(
+        'INSERT INTO unit_image (unit_id, image_url, is_main, sort_order) VALUES ?',
+        [imgValues]
+      );
+    }
+
+    const [rows] = await pool.query(
+      `SELECT u.unit_id, u.unit_name, u.location, u.city, u.country,
+              u.bedroom_count, u.bathroom_count, u.area_sqm, u.unit_type,
+              u.description, u.amenities, u.min_pax, u.max_capacity,
+              u.base_price, u.excess_pax_fee, u.status, u.is_featured,
+              u.check_in_time, u.check_out_time, u.latitude, u.longitude,
+              u.created_at, u.updated_at
+       FROM unit u WHERE u.unit_id = ?`,
+      [unitId]
+    );
+    const [imgRows] = await pool.query(
+      'SELECT image_url, is_main FROM unit_image WHERE unit_id = ? ORDER BY is_main DESC, sort_order ASC',
+      [unitId]
+    );
+
+    const r = rows[0];
+    res.json({
+      id: String(r.unit_id),
+      title: r.unit_name,
+      description: r.description,
+      price: Number(r.base_price),
+      price_unit: 'night',
+      currency: '₱',
+      location: r.location || '',
+      city: r.city,
+      country: r.country,
+      bedrooms: r.bedroom_count,
+      bathrooms: r.bathroom_count,
+      square_feet: r.area_sqm ? Math.round(r.area_sqm * 10.764) : null,
+      property_type: r.unit_type,
+      main_image_url: imgRows.find((i) => i.is_main)?.image_url || imgRows[0]?.image_url || null,
+      image_urls: imgRows.map((i) => i.image_url),
+      amenities: parseJsonArray(r.amenities),
+      is_available: r.status === 'available',
+      is_featured: Boolean(r.is_featured),
+      min_pax: r.min_pax,
+      max_capacity: r.max_capacity,
+      excess_pax_fee: Number(r.excess_pax_fee),
+      latitude: r.latitude ? Number(r.latitude) : null,
+      longitude: r.longitude ? Number(r.longitude) : null,
+      check_in_time: r.check_in_time,
+      check_out_time: r.check_out_time,
+      updated_at: r.updated_at,
+    });
+  } catch (error) {
+    console.error('Update unit full error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
@@ -511,4 +668,36 @@ async function createUnit(req, res) {
   }
 }
 
-module.exports = { listUnits, getUnitById, listUnitsForManage, updateUnit, createUnit };
+async function deleteUnit(req, res) {
+  try {
+    const { id } = req.params;
+    const unitId = parseInt(id, 10);
+    if (!Number.isFinite(unitId)) {
+      return res.status(400).json({ error: 'Invalid unit ID' });
+    }
+
+    const [existing] = await pool.query('SELECT unit_id FROM unit WHERE unit_id = ?', [unitId]);
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Unit not found' });
+    }
+
+    const [bookings] = await pool.query(
+      'SELECT 1 FROM booking WHERE unit_id = ? LIMIT 1',
+      [unitId]
+    );
+    if (bookings.length > 0) {
+      return res.status(409).json({
+        error: 'Cannot delete unit with existing bookings. Cancel or complete all bookings first.',
+      });
+    }
+
+    await pool.query('DELETE FROM unit WHERE unit_id = ?', [unitId]);
+
+    res.status(200).json({ id: String(unitId), deleted: true });
+  } catch (error) {
+    console.error('Delete unit error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+module.exports = { listUnits, getUnitById, listUnitsForManage, updateUnit, updateUnitFull, createUnit, deleteUnit };

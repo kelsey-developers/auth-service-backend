@@ -74,9 +74,8 @@ async function createBooking(req, res) {
     const unitId = body.listing_id || body.unit_id;
     const checkIn = toDateOnly(body.check_in_date) || body.check_in_date;
     const checkOut = toDateOnly(body.check_out_date) || body.check_out_date;
-    const numGuests = Math.max(1, parseInt(body.num_guests, 10) || 1);
-    const extraGuests = Math.max(0, parseInt(body.extra_guests, 10) || 0);
-    const pax = numGuests + extraGuests;
+    const totalGuests = Math.max(1, parseInt(body.total_guests, 10) || 1);
+    const pax = totalGuests;
     const client = body.client || {};
 
     // For agent bookings, client is always from the form. Never use guest_user_id from body.
@@ -94,7 +93,7 @@ async function createBooking(req, res) {
 
     // Fetch unit pricing from DB (never trust client for amounts)
     const [unitRows] = await connection.query(
-      `SELECT base_price, excess_pax_fee, min_pax FROM unit WHERE unit_id = ?`,
+      `SELECT base_price, excess_pax_fee, min_pax, max_capacity FROM unit WHERE unit_id = ?`,
       [unitId]
     );
     if (unitRows.length === 0) {
@@ -104,16 +103,17 @@ async function createBooking(req, res) {
     const basePricePerNight = parseFloat(unit.base_price) || 0;
     const excessPaxFee = parseFloat(unit.excess_pax_fee) || 0;
     const minPax = parseInt(unit.min_pax, 10) || 1;
+    const maxCapacity = parseInt(unit.max_capacity, 10) || minPax;
 
     // Calculate nights and total server-side
     const checkInDate = new Date(checkIn);
     const checkOutDate = new Date(checkOut);
     const nights = Math.max(0, Math.round((checkOutDate - checkInDate) / (24 * 60 * 60 * 1000)));
-    const guestsAboveMinPax = Math.max(0, pax - minPax);
     const baseTotal = basePricePerNight * Math.max(1, nights);
-    const extraGuestFees = guestsAboveMinPax * excessPaxFee * Math.max(1, nights);
-    const SERVICE_CHARGE = 100;
-    const totalAmount = baseTotal + extraGuestFees + SERVICE_CHARGE;
+    // When total_guests exceeds max_capacity, charge excess_pax_fee per guest over capacity per night
+    const guestsOverMax = Math.max(0, pax - maxCapacity);
+    const excessOverCapacityFees = guestsOverMax * excessPaxFee * Math.max(1, nights);
+    const totalAmount = baseTotal + excessOverCapacityFees;
 
     // Check for overlapping bookings
     const [existing] = await connection.query(
@@ -196,7 +196,7 @@ async function createBooking(req, res) {
       reference_code: referenceCode,
       check_in_date: checkIn,
       check_out_date: checkOut,
-      num_guests: pax,
+      total_guests: pax,
       status: 'penciled',
       guest_user_id: guestUserId,
       guest_booking_info_id: guestBookingInfoId,
@@ -233,7 +233,7 @@ async function getBookingById(req, res) {
     const [rows] = await pool.query(
       `SELECT b.booking_id, b.reference_code, b.guest_user_id, b.guest_booking_info_id, b.unit_id, b.agent_user_id,
               b.checkin_date, b.checkout_date, b.pax, b.booking_status, b.created_at,
-              u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.min_pax, u.check_in_time, u.check_out_time,
+              u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.min_pax, u.max_capacity, u.check_in_time, u.check_out_time,
               u.latitude, u.longitude, u.unit_type,
               (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
               g.first_name AS guest_first_name, g.last_name AS guest_last_name, g.email AS guest_email, g.contact_number AS guest_contact,
@@ -270,13 +270,12 @@ async function getBookingById(req, res) {
 
     const basePricePerNight = Number(row.base_price) || 0;
     const excessPaxFee = Number(row.excess_pax_fee) || 0;
-    const minPax = parseInt(row.min_pax, 10) || 1;
+    const maxCapacity = parseInt(row.max_capacity, 10) || parseInt(row.min_pax, 10) || 1;
     const pax = parseInt(row.pax, 10) || 1;
-    const guestsAboveMinPax = Math.max(0, pax - minPax);
+    const guestsOverMax = Math.max(0, pax - maxCapacity);
     const baseTotal = basePricePerNight * Math.max(1, nights);
-    const extraGuestFees = guestsAboveMinPax * excessPaxFee * Math.max(1, nights);
-    const SERVICE_CHARGE = 100;
-    const totalAmount = baseTotal + extraGuestFees + SERVICE_CHARGE;
+    const excessOverCapacityFees = guestsOverMax * excessPaxFee * Math.max(1, nights);
+    const totalAmount = baseTotal + excessOverCapacityFees;
 
     const agentFullname = row.agent_first_name || row.agent_last_name
       ? [row.agent_first_name, row.agent_middle_name, row.agent_last_name].filter(Boolean).join(' ')
@@ -297,12 +296,11 @@ async function getBookingById(req, res) {
       check_in_date: checkIn,
       check_out_date: checkOut,
       nights,
-      num_guests: pax,
-      extra_guests: guestsAboveMinPax,
-      extra_guest_charge: extraGuestFees,
+      total_guests: pax,
+      excess_pax_charge: excessOverCapacityFees,
       unit_charge: basePricePerNight,
       amenities_charge: 0,
-      service_charge: SERVICE_CHARGE,
+      service_charge: 0,
       discount: 0,
       total_amount: totalAmount,
       currency: 'PHP',
@@ -514,7 +512,7 @@ async function getAllBookings(req, res) {
 
     const [rows] = await pool.query(
       `SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status, b.created_at,
-              u.unit_id, u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.min_pax,
+              u.unit_id, u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.min_pax, u.max_capacity,
               (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
               g.first_name AS guest_first_name, g.last_name AS guest_last_name,
               g.email AS guest_email, g.contact_number AS guest_contact,
@@ -540,15 +538,14 @@ async function getAllBookings(req, res) {
         : 0;
       const basePricePerNight = Number(r.base_price) || 0;
       const excessPaxFee = Number(r.excess_pax_fee) || 0;
-      const minPax = parseInt(r.min_pax, 10) || 1;
+      const maxCapacity = parseInt(r.max_capacity, 10) || parseInt(r.min_pax, 10) || 1;
       const pax = parseInt(r.pax, 10) || 1;
-      const guestsAboveMin = Math.max(0, pax - minPax);
+      const guestsOverMax = Math.max(0, pax - maxCapacity);
       const baseTotal = basePricePerNight * Math.max(1, nights);
-      const extraFees = guestsAboveMin * excessPaxFee * Math.max(1, nights);
-      const SERVICE_CHARGE = 100;
+      const excessFees = guestsOverMax * excessPaxFee * Math.max(1, nights);
       const totalAmount = r.deposit_amount
         ? Number(r.deposit_amount)
-        : baseTotal + extraFees + SERVICE_CHARGE;
+        : baseTotal + excessFees;
 
       return {
         id: String(r.booking_id),
@@ -556,7 +553,7 @@ async function getAllBookings(req, res) {
         check_in_date: checkIn,
         check_out_date: checkOut,
         nights,
-        num_guests: pax,
+        total_guests: pax,
         status: mapBookingStatus(r.booking_status),
         raw_status: r.booking_status,
         total_amount: totalAmount,
