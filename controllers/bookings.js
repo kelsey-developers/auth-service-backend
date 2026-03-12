@@ -350,29 +350,54 @@ async function getBookingById(req, res) {
 
 /**
  * GET /api/bookings/my
- * List bookings where agent_user_id = current user. Requires auth.
+ * Agent: bookings where agent_user_id = current user.
+ * Admin: all bookings across all agents.
+ * Supports ?status= filter (penciled|confirmed|cancelled|completed).
  */
 async function getMyBookings(req, res) {
   try {
     const userId = req.user?.userId;
+    const roles = req.user?.roles || [];
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const [rows] = await pool.query(
-      `SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status,
-              u.unit_name, u.location, u.base_price,
-              (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
-              g.first_name AS guest_first_name, g.last_name AS guest_last_name,
-              p.payment_id, p.payment_status, p.deposit_amount
-       FROM booking b
-       JOIN unit u ON u.unit_id = b.unit_id
-       LEFT JOIN guest_booking_info g ON g.guest_booking_info_id = b.guest_booking_info_id
-       LEFT JOIN payment p ON p.booking_id = b.booking_id
-       WHERE b.agent_user_id = ?
-       ORDER BY b.checkin_date DESC`,
-      [userId]
-    );
+    const isAdmin = roles.includes('Admin');
+
+    const ALLOWED_STATUSES = ['penciled', 'confirmed', 'cancelled', 'completed'];
+    const statusFilter = req.query.status && ALLOWED_STATUSES.includes(req.query.status)
+      ? req.query.status
+      : null;
+
+    let sql = `
+      SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status,
+             u.unit_name, u.location, u.base_price,
+             (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
+             g.first_name AS guest_first_name, g.last_name AS guest_last_name,
+             a.first_name AS agent_first_name, a.last_name AS agent_last_name,
+             p.payment_id, p.payment_status, p.deposit_amount
+      FROM booking b
+      JOIN unit u ON u.unit_id = b.unit_id
+      LEFT JOIN guest_booking_info g ON g.guest_booking_info_id = b.guest_booking_info_id
+      LEFT JOIN \`user\` a ON a.user_id = b.agent_user_id
+      LEFT JOIN payment p ON p.booking_id = b.booking_id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (!isAdmin) {
+      sql += ' AND b.agent_user_id = ?';
+      params.push(userId);
+    }
+
+    if (statusFilter) {
+      sql += ' AND b.booking_status = ?';
+      params.push(statusFilter);
+    }
+
+    sql += ' ORDER BY b.created_at DESC';
+
+    const [rows] = await pool.query(sql, params);
 
     const bookings = rows.map((r) => {
       const checkIn = r.checkin_date;
@@ -389,6 +414,7 @@ async function getMyBookings(req, res) {
         check_in_date: toDateOnly(checkIn) || checkIn,
         check_out_date: toDateOnly(checkOut) || checkOut,
         status: mapBookingStatus(r.booking_status),
+        raw_status: r.booking_status,
         total_amount: totalAmount,
         transaction_number: r.payment_id ? `TXN-${r.payment_id}` : '',
         listing: {
@@ -396,6 +422,10 @@ async function getMyBookings(req, res) {
           location: r.location || '',
           main_image_url: r.main_image_url || '/heroimage.png',
         },
+        agent: isAdmin ? {
+          first_name: r.agent_first_name || '',
+          last_name: r.agent_last_name || '',
+        } : undefined,
         client: {
           first_name: r.guest_first_name || '',
           last_name: r.guest_last_name || '',
@@ -410,6 +440,160 @@ async function getMyBookings(req, res) {
     res.json(bookings);
   } catch (error) {
     console.error('Get my bookings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * GET /api/bookings/all
+ * Admin only. All bookings with pagination and filters.
+ * Query params:
+ *   page      - page number (default 1)
+ *   limit     - per page (default 20, max 100)
+ *   status    - penciled | confirmed | cancelled | completed
+ *   unit_id   - filter by unit
+ *   agent_id  - filter by agent user
+ *   search    - reference_code OR client first/last name
+ */
+async function getAllBookings(req, res) {
+  try {
+    const roles = req.user?.roles || [];
+    if (!roles.includes('Admin')) {
+      return res.status(403).json({ error: 'Admin role required' });
+    }
+
+    const ALLOWED_STATUSES = ['penciled', 'confirmed', 'cancelled', 'completed'];
+    const statusFilter = req.query.status && ALLOWED_STATUSES.includes(req.query.status)
+      ? req.query.status
+      : null;
+    const unitId = req.query.unit_id ? parseInt(req.query.unit_id, 10) : null;
+    const agentId = req.query.agent_id ? parseInt(req.query.agent_id, 10) : null;
+    const search = req.query.search ? String(req.query.search).trim() : null;
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const offset = (page - 1) * limit;
+
+    const conditions = ['1=1'];
+    const params = [];
+
+    if (statusFilter) {
+      conditions.push('b.booking_status = ?');
+      params.push(statusFilter);
+    }
+    if (unitId && Number.isFinite(unitId)) {
+      conditions.push('b.unit_id = ?');
+      params.push(unitId);
+    }
+    if (agentId && Number.isFinite(agentId)) {
+      conditions.push('b.agent_user_id = ?');
+      params.push(agentId);
+    }
+    if (search) {
+      conditions.push(
+        '(b.reference_code LIKE ? OR g.first_name LIKE ? OR g.last_name LIKE ? OR a.first_name LIKE ? OR a.last_name LIKE ?)'
+      );
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like);
+    }
+
+    const where = conditions.join(' AND ');
+
+    // Count total for pagination
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) AS total
+       FROM booking b
+       JOIN unit u ON u.unit_id = b.unit_id
+       LEFT JOIN guest_booking_info g ON g.guest_booking_info_id = b.guest_booking_info_id
+       LEFT JOIN \`user\` a ON a.user_id = b.agent_user_id
+       WHERE ${where}`,
+      params
+    );
+    const total = Number(countRows[0].total) || 0;
+    const totalPages = Math.ceil(total / limit);
+
+    const [rows] = await pool.query(
+      `SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status, b.created_at,
+              u.unit_id, u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.min_pax,
+              (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
+              g.first_name AS guest_first_name, g.last_name AS guest_last_name,
+              g.email AS guest_email, g.contact_number AS guest_contact,
+              b.agent_user_id,
+              a.first_name AS agent_first_name, a.last_name AS agent_last_name, a.email AS agent_email,
+              p.payment_id, p.payment_status, p.deposit_amount, p.method AS payment_method
+       FROM booking b
+       JOIN unit u ON u.unit_id = b.unit_id
+       LEFT JOIN guest_booking_info g ON g.guest_booking_info_id = b.guest_booking_info_id
+       LEFT JOIN \`user\` a ON a.user_id = b.agent_user_id
+       LEFT JOIN payment p ON p.booking_id = b.booking_id
+       WHERE ${where}
+       ORDER BY b.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    const data = rows.map((r) => {
+      const checkIn = toDateOnly(r.checkin_date) || r.checkin_date;
+      const checkOut = toDateOnly(r.checkout_date) || r.checkout_date;
+      const nights = checkIn && checkOut
+        ? Math.max(0, Math.round((new Date(checkOut) - new Date(checkIn)) / (24 * 60 * 60 * 1000)))
+        : 0;
+      const basePricePerNight = Number(r.base_price) || 0;
+      const excessPaxFee = Number(r.excess_pax_fee) || 0;
+      const minPax = parseInt(r.min_pax, 10) || 1;
+      const pax = parseInt(r.pax, 10) || 1;
+      const guestsAboveMin = Math.max(0, pax - minPax);
+      const baseTotal = basePricePerNight * Math.max(1, nights);
+      const extraFees = guestsAboveMin * excessPaxFee * Math.max(1, nights);
+      const SERVICE_CHARGE = 100;
+      const totalAmount = r.deposit_amount
+        ? Number(r.deposit_amount)
+        : baseTotal + extraFees + SERVICE_CHARGE;
+
+      return {
+        id: String(r.booking_id),
+        reference_code: r.reference_code || `BKG-${String(r.booking_id).padStart(6, '0')}`,
+        check_in_date: checkIn,
+        check_out_date: checkOut,
+        nights,
+        num_guests: pax,
+        status: mapBookingStatus(r.booking_status),
+        raw_status: r.booking_status,
+        total_amount: totalAmount,
+        created_at: r.created_at,
+        listing: {
+          id: String(r.unit_id),
+          title: r.unit_name || '',
+          location: r.location || '',
+          main_image_url: r.main_image_url || '/heroimage.png',
+        },
+        agent: {
+          id: r.agent_user_id ? String(r.agent_user_id) : null,
+          first_name: r.agent_first_name || '',
+          last_name: r.agent_last_name || '',
+          email: r.agent_email || '',
+        },
+        client: {
+          first_name: r.guest_first_name || '',
+          last_name: r.guest_last_name || '',
+          email: r.guest_email || '',
+          contact_number: r.guest_contact || '',
+        },
+        payment: r.payment_id ? {
+          payment_method: r.payment_method || 'other',
+          reference_number: `TXN-${r.payment_id}`,
+          status: r.payment_status || 'pending',
+          deposit_amount: Number(r.deposit_amount) || 0,
+        } : null,
+      };
+    });
+
+    res.json({
+      data,
+      pagination: { page, limit, total, total_pages: totalPages },
+    });
+  } catch (error) {
+    console.error('Get all bookings error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
@@ -435,4 +619,4 @@ function mapPaymentMethod(method) {
   return map[method] || 'other';
 }
 
-module.exports = { getBookings, getMyBookings, getBookingById, createBooking };
+module.exports = { getBookings, getMyBookings, getAllBookings, getBookingById, createBooking };

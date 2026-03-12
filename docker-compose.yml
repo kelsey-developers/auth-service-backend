@@ -6,11 +6,14 @@ services:
     environment:
       PORT: 3001
       JWT_SECRET: your-secret-key-change-in-production
+      PUBLIC_URL: https://kelsey.idateph.com
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: app_user
       DB_PASSWORD: app_password
       DB_NAME: kelseydb
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       mysql:
         condition: service_healthy
@@ -35,3 +38,4 @@ services:
 
 volumes:
   mysql_data:
+  uploads_data:
