@@ -2,6 +2,9 @@
 -- OPTIONAL: CLEAN DROP ORDER
 -- =========================
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS agent_registration;
+DROP TABLE IF EXISTS balance_history;
+DROP TABLE IF EXISTS balance;
 DROP TABLE IF EXISTS agent_relationship;
 DROP TABLE IF EXISTS payment_status_history;
 DROP TABLE IF EXISTS payment;
@@ -281,6 +284,43 @@ CREATE TABLE payment_status_history (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
+-- AGENT COMMISSION BALANCE
+-- =========================
+CREATE TABLE balance (
+    balance_id             BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    agent_user_id           BIGINT NOT NULL UNIQUE,
+    current_amount          DECIMAL(12,2) NOT NULL DEFAULT 0,
+    created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_balance_agent
+        FOREIGN KEY (agent_user_id) REFERENCES `user`(user_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+
+    CONSTRAINT chk_balance_current
+        CHECK (current_amount >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE balance_history (
+    balance_history_id      BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    agent_user_id           BIGINT NOT NULL,
+    type                    VARCHAR(20) NOT NULL,
+    amount                  DECIMAL(12,2) NOT NULL,
+    reference_type          VARCHAR(50),
+    reference_id            VARCHAR(100),
+    created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_balance_history_agent
+        FOREIGN KEY (agent_user_id) REFERENCES `user`(user_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+
+    CONSTRAINT chk_balance_history_type
+        CHECK (type IN ('add', 'remove')),
+    CONSTRAINT chk_balance_history_amount
+        CHECK (amount > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
 -- AGENT RELATIONSHIP
 -- =========================
 CREATE TABLE agent_relationship (
@@ -336,8 +376,40 @@ CREATE INDEX idx_payment_verified_by ON payment(verified_by_user_id);
 CREATE INDEX idx_payment_status_history_payment_id ON payment_status_history(payment_id);
 CREATE INDEX idx_payment_status_history_changed_by ON payment_status_history(changed_by_user_id);
 
+CREATE INDEX idx_balance_agent_user_id ON balance(agent_user_id);
+CREATE INDEX idx_balance_history_agent_user_id ON balance_history(agent_user_id);
+CREATE INDEX idx_balance_history_created_at ON balance_history(created_at);
+
 CREATE INDEX idx_agent_relationship_parent ON agent_relationship(parent_agent_user_id);
 CREATE INDEX idx_agent_relationship_child ON agent_relationship(child_agent_user_id);
+
+-- =========================
+-- AGENT REGISTRATION (become-an-agent applications)
+-- =========================
+CREATE TABLE agent_registration (
+    agent_registration_id   BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id                 BIGINT NOT NULL UNIQUE,
+    payment_proof_url       TEXT,
+    referred_by_user_id     BIGINT,
+    status                  VARCHAR(30) NOT NULL DEFAULT 'pending',
+    created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_agent_registration_user
+        FOREIGN KEY (user_id) REFERENCES `user`(user_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+
+    CONSTRAINT fk_agent_registration_referred_by
+        FOREIGN KEY (referred_by_user_id) REFERENCES `user`(user_id)
+        ON UPDATE CASCADE ON DELETE SET NULL,
+
+    CONSTRAINT chk_agent_registration_status
+        CHECK (status IN ('pending', 'approved', 'rejected'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE INDEX idx_agent_registration_user_id ON agent_registration(user_id);
+CREATE INDEX idx_agent_registration_status ON agent_registration(status);
+CREATE INDEX idx_agent_registration_referred_by ON agent_registration(referred_by_user_id);
 
 
 -- =========================
