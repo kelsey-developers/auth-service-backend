@@ -80,6 +80,26 @@ function requireAdminOrAgent(req, res, next) {
 }
 
 /**
+ * Requires user to have Admin role only.
+ * Must be used after requireAuth.
+ */
+function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  const hasAdmin = req.user.roles.includes('Admin');
+
+  if (!hasAdmin) {
+    return res.status(403).json({
+      error: 'Admin role required',
+    });
+  }
+
+  next();
+}
+
+/**
  * Optional auth: attaches req.user when token is valid, does not fail when missing.
  * Use for routes that work with or without auth (e.g. guest viewing booking confirmation).
  */
@@ -140,4 +160,4 @@ async function optionalAuth(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireAdminOrAgent, optionalAuth };
+module.exports = { requireAuth, requireAdminOrAgent, requireAdmin, optionalAuth };
