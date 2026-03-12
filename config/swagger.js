@@ -371,6 +371,79 @@ function buildSpec(port) {
           },
         },
       },
+      '/api/employees': {
+        get: {
+          summary: 'List active employees',
+          tags: ['Employees'],
+          description: 'Returns all active employees used for DTR and payroll.',
+          responses: {
+            200: {
+              description: 'Array of employees',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        employee_id: { type: 'integer', example: 1 },
+                        full_name: { type: 'string', example: 'Test Cleaner' },
+                        position: { type: 'string', example: 'Housekeeper' },
+                        employment_type: {
+                          type: 'string',
+                          enum: ['DAILY', 'MONTHLY', 'COMMISSION'],
+                          example: 'DAILY',
+                        },
+                        current_rate: { type: 'number', example: 500 },
+                        unit_id: { type: 'integer', nullable: true },
+                        status: { type: 'string', example: 'active' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            500: { description: 'Internal server error' },
+          },
+        },
+        post: {
+          summary: 'Create a new employee',
+          tags: ['Employees'],
+          description: 'Create an employee record for use in DTR and payroll.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['full_name', 'position', 'employment_type', 'current_rate'],
+                  properties: {
+                    full_name: { type: 'string', example: 'Test Cleaner' },
+                    position: { type: 'string', example: 'Housekeeper' },
+                    employment_type: {
+                      type: 'string',
+                      enum: ['DAILY', 'MONTHLY', 'COMMISSION'],
+                      example: 'DAILY',
+                    },
+                    current_rate: { type: 'number', example: 500 },
+                    role: {
+                      type: 'string',
+                      example: 'HOUSEKEEPING',
+                      description: 'Front-end role hint (HOUSEKEEPING or ADMIN).',
+                    },
+                    unit_id: { type: 'integer', nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: 'Employee created successfully' },
+            400: { description: 'Validation error — missing or invalid fields' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
       '/api/units': {
         get: {
           summary: 'List units',
@@ -1080,6 +1153,144 @@ function buildSpec(port) {
             400: { description: 'Invalid booking ID or reference' },
             403: { description: 'Forbidden - not agent or Admin' },
             404: { description: 'Booking not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/sites': {
+        get: {
+          summary: 'List QR sites / units',
+          tags: ['Sites'],
+          description: 'List all QR sites that can be used for on-site employee check-ins.',
+          responses: {
+            200: {
+              description: 'Array of site definitions',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        site_id: { type: 'string', example: 'SITE_MAGALLANES_01' },
+                        name: { type: 'string', example: 'Magallanes Boarding House – Main Gate' },
+                        latitude: { type: 'number', nullable: true, example: 7.0707 },
+                        longitude: { type: 'number', nullable: true, example: 125.6087 },
+                        radius_m: { type: 'number', nullable: true, example: 200 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            500: { description: 'Internal server error' },
+          },
+        },
+        post: {
+          summary: 'Create a new QR site',
+          tags: ['Sites'],
+          description: 'Create a new site/unit definition that will be encoded into a QR code for on-site DTR check-ins. Admin only.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['site_id', 'name'],
+                  properties: {
+                    site_id: {
+                      type: 'string',
+                      maxLength: 100,
+                      example: 'SITE_MAGALLANES_01',
+                      description: 'Stable identifier encoded into the QR code (e.g., SITE_<LOCATION>_<NUMBER>).',
+                    },
+                    name: {
+                      type: 'string',
+                      maxLength: 255,
+                      example: 'Magallanes Boarding House – Main Gate',
+                      description: 'Human-readable name shown in admin tools.',
+                    },
+                    latitude: {
+                      type: 'number',
+                      nullable: true,
+                      example: 7.0707,
+                      description: 'Optional GPS latitude for on-site radius validation.',
+                    },
+                    longitude: {
+                      type: 'number',
+                      nullable: true,
+                      example: 125.6087,
+                      description: 'Optional GPS longitude for on-site radius validation.',
+                    },
+                    radius_m: {
+                      type: 'number',
+                      nullable: true,
+                      example: 200,
+                      description: 'Optional maximum distance (meters) allowed from the site coordinates.',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Site created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      site_id: { type: 'string' },
+                      name: { type: 'string' },
+                      latitude: { type: 'number', nullable: true },
+                      longitude: { type: 'number', nullable: true },
+                      radius_m: { type: 'number', nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error — missing or invalid fields' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            409: { description: 'Conflict — site_id already exists' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/sites/{id}': {
+        delete: {
+          summary: 'Delete a QR site',
+          tags: ['Sites'],
+          description: 'Delete an existing QR site by its site_id.',
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+              description: 'Site ID (site_id) to delete',
+            },
+          ],
+          responses: {
+            200: {
+              description: 'Site deleted successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      site_id: { type: 'string' },
+                      deleted: { type: 'boolean', example: true },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error — missing or invalid site_id' },
+            404: { description: 'Site not found' },
             500: { description: 'Internal server error' },
           },
         },

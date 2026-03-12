@@ -10,6 +10,12 @@ DROP TABLE IF EXISTS guest_booking_info;
 DROP TABLE IF EXISTS booking;
 DROP TABLE IF EXISTS unit_image;
 DROP TABLE IF EXISTS unit;
+DROP TABLE IF EXISTS site;
+DROP TABLE IF EXISTS booking_commissions;
+DROP TABLE IF EXISTS payroll_records;
+DROP TABLE IF EXISTS task_logs;
+DROP TABLE IF EXISTS dtr_records;
+DROP TABLE IF EXISTS employees;
 DROP TABLE IF EXISTS user_role;
 DROP TABLE IF EXISTS role;
 DROP TABLE IF EXISTS `user`;
@@ -122,6 +128,101 @@ CREATE TABLE unit (
         CHECK (excess_pax_fee >= 0),
     CONSTRAINT chk_unit_status
         CHECK (status IN ('available', 'unavailable', 'maintenance'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
+-- EMPLOYEES (for DTR/Payroll)
+-- =========================
+CREATE TABLE employees (
+    employee_id      BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    full_name        VARCHAR(200) NOT NULL,
+    position         VARCHAR(100) NOT NULL,
+    employee_code    VARCHAR(50) NOT NULL UNIQUE,
+    role             VARCHAR(50) NOT NULL DEFAULT 'employee',
+    employment_type  VARCHAR(20) NOT NULL,
+    current_rate     DECIMAL(12,2) NOT NULL DEFAULT 0,
+    unit_id          BIGINT,
+    status           VARCHAR(20) NOT NULL DEFAULT 'active',
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_employees_unit
+        FOREIGN KEY (unit_id) REFERENCES unit(unit_id)
+        ON UPDATE CASCADE ON DELETE SET NULL,
+
+    CONSTRAINT chk_employment_type
+        CHECK (employment_type IN ('DAILY', 'MONTHLY', 'COMMISSION')),
+    CONSTRAINT chk_employee_status
+        CHECK (status IN ('active', 'inactive'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
+-- QR SITES (for on-site check-ins)
+-- =========================
+CREATE TABLE site (
+    site_id     VARCHAR(100) NOT NULL PRIMARY KEY,
+    name        VARCHAR(255) NOT NULL,
+    latitude    DECIMAL(10,7),
+    longitude   DECIMAL(10,7),
+    radius_m    DECIMAL(10,2),
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
+-- DTR RECORDS
+-- =========================
+CREATE TABLE dtr_records (
+    dtr_id             BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    employee_id        BIGINT NOT NULL,
+    work_date          DATE NOT NULL,
+    time_in            DATETIME,
+    time_out           DATETIME,
+    hours_worked       DECIMAL(10,2),
+    status             VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+    shift_start        TIME,
+    shift_end          TIME,
+    latitude           DECIMAL(10,7),
+    longitude          DECIMAL(10,7),
+    site_id            VARCHAR(100),
+    is_verified        TINYINT(1),
+    verification_notes TEXT,
+    verified_at        DATETIME,
+    created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_dtr_employee
+        FOREIGN KEY (employee_id) REFERENCES employees(employee_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_dtr_site
+        FOREIGN KEY (site_id) REFERENCES site(site_id)
+        ON UPDATE CASCADE ON DELETE SET NULL,
+    CONSTRAINT uq_dtr_employee_date
+        UNIQUE (employee_id, work_date),
+    CONSTRAINT chk_dtr_status
+        CHECK (status IN ('OPEN', 'CLOSED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
+-- TASK LOGS (DTR photo proof)
+-- =========================
+CREATE TABLE task_logs (
+    id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    dtr_id          BIGINT NOT NULL,
+    employee_id     BIGINT NOT NULL,
+    unit_name       VARCHAR(255) NOT NULL,
+    task_type       VARCHAR(100) NOT NULL,
+    proof_photo_url TEXT,
+    completed_at    DATETIME NOT NULL,
+    status          VARCHAR(30) NOT NULL DEFAULT 'COMPLETED',
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_task_logs_dtr
+        FOREIGN KEY (dtr_id) REFERENCES dtr_records(dtr_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_task_logs_employee
+        FOREIGN KEY (employee_id) REFERENCES employees(employee_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE unit_image (
@@ -278,6 +379,61 @@ CREATE TABLE payment_status_history (
         CHECK (from_status IS NULL OR from_status IN ('pending', 'submitted', 'verified', 'rejected')),
     CONSTRAINT chk_payment_status_history_to
         CHECK (to_status IN ('pending', 'submitted', 'verified', 'rejected'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
+-- PAYROLL & COMMISSIONS
+-- =========================
+CREATE TABLE payroll_records (
+    id                    VARCHAR(50) NOT NULL PRIMARY KEY,
+    employee_id           BIGINT,
+    agent_id              BIGINT,
+    employment_type       VARCHAR(20) NOT NULL,
+    pay_period_start      DATE NOT NULL,
+    pay_period_end        DATE NOT NULL,
+    status                VARCHAR(20) NOT NULL DEFAULT 'pending',
+    days_worked           INT,
+    daily_rate            DECIMAL(12,2),
+    base_pay              DECIMAL(12,2),
+    monthly_rate          DECIMAL(12,2),
+    bonus_amount          DECIMAL(12,2),
+    overtime_hours        DECIMAL(10,2),
+    overtime_pay          DECIMAL(12,2),
+    gross_income          DECIMAL(12,2),
+    total_deductions      DECIMAL(12,2),
+    net_pay               DECIMAL(12,2),
+    reference_number      VARCHAR(50),
+    payment_date          DATE,
+    total_bookings        INT,
+    created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_payroll_employee
+        FOREIGN KEY (employee_id) REFERENCES employees(employee_id)
+        ON UPDATE CASCADE ON DELETE SET NULL,
+    CONSTRAINT fk_payroll_agent
+        FOREIGN KEY (agent_id) REFERENCES `user`(user_id)
+        ON UPDATE CASCADE ON DELETE SET NULL,
+    CONSTRAINT chk_payroll_employment_type
+        CHECK (employment_type IN ('DAILY', 'MONTHLY', 'COMMISSION')),
+    CONSTRAINT chk_payroll_status
+        CHECK (status IN ('pending', 'approved', 'processed', 'paid', 'declined'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE booking_commissions (
+    id                   BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    payroll_id           VARCHAR(50) NOT NULL,
+    booking_id           BIGINT NOT NULL,
+    booking_date         DATE NOT NULL,
+    commission_amount    DECIMAL(12,2) NOT NULL,
+    commission_status    VARCHAR(20) NOT NULL DEFAULT 'unpaid',
+    paid_date            DATE,
+    approved_by          VARCHAR(100),
+    gcash_reference      VARCHAR(100),
+    gcash_receipt_url    TEXT,
+
+    CONSTRAINT fk_booking_commissions_payroll
+        FOREIGN KEY (payroll_id) REFERENCES payroll_records(id)
+        ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
