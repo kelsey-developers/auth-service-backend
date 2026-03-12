@@ -270,7 +270,7 @@ function buildSpec(port) {
             {
               name: 'role',
               in: 'query',
-              schema: { type: 'string', enum: ['Guest', 'Agent', 'Admin'] },
+              schema: { type: 'string', enum: ['Guest', 'Agent', 'Admin', 'Finance', 'Inventory', 'Housekeeping'] },
               description: 'Filter by role name',
             },
             { name: 'page', in: 'query', schema: { type: 'integer', default: 1 }, description: 'Page number' },
@@ -337,7 +337,7 @@ function buildSpec(port) {
                     firstName: { type: 'string', example: 'Juan' },
                     lastName: { type: 'string', example: 'Dela Cruz' },
                     email: { type: 'string', format: 'email', example: 'juan@example.com' },
-                    role: { type: 'string', enum: ['Guest', 'Agent', 'Admin'], example: 'Agent' },
+                    role: { type: 'string', enum: ['Guest', 'Agent', 'Admin', 'Finance', 'Inventory', 'Housekeeping'], example: 'Agent' },
                   },
                 },
               },

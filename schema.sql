@@ -52,7 +52,7 @@ CREATE TABLE role (
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT chk_role_name
-        CHECK (role_name IN ('Guest', 'Agent', 'Admin')),
+        CHECK (role_name IN ('Guest', 'Agent', 'Admin', 'Finance', 'Inventory', 'Housekeeping')),
     CONSTRAINT chk_role_status
         CHECK (status IN ('active', 'inactive'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -346,7 +346,10 @@ CREATE INDEX idx_agent_relationship_child ON agent_relationship(child_agent_user
 INSERT INTO role (role_name, description) VALUES
   ('Guest', 'Guest user'),
   ('Agent', 'Booking agent'),
-  ('Admin', 'Administrator');
+  ('Admin', 'Administrator'),
+  ('Finance', 'Access to Finance section of Sales Report'),
+  ('Inventory', 'Access to Inventory section of Sales Report'),
+  ('Housekeeping', 'Access to Housekeeping section of Sales Report');
 
 INSERT INTO unit (unit_name, location, city, country, bedroom_count, bathroom_count, area_sqm, unit_type, description, amenities, min_pax, max_capacity, base_price, excess_pax_fee, status, is_featured, check_in_time, check_out_time) VALUES
   ('Luxury Beachfront Villa', 'Boracay, Aklan', 'Boracay', 'Philippines', 4, 3, 232, 'villa', 'Experience paradise in this stunning beachfront villa with panoramic ocean views, private pool, and direct beach access.', '["Beach Access","Private Pool","WiFi","Air Conditioning","Full Kitchen"]', 2, 10, 8500, 500, 'available', 1, '14:00', '11:00'),
