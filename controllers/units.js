@@ -105,6 +105,12 @@ async function getUnitById(req, res) {
       [id]
     );
 
+    const [agentRows] = await pool.query(
+      'SELECT agent_user_id FROM unit_agent WHERE unit_id = ?',
+      [id]
+    );
+    const assigned_agent_ids = agentRows.map((a) => String(a.agent_user_id));
+
     const r = rows[0];
     const images = imgRows.map((i) => i.image_url);
     const mainImg = imgRows.find((i) => i.is_main)?.image_url || imgRows[0]?.image_url;
@@ -138,6 +144,7 @@ async function getUnitById(req, res) {
       check_out_time: r.check_out_time,
       created_at: r.created_at,
       updated_at: r.updated_at,
+      assigned_agent_ids,
     };
 
     res.json(unit);
@@ -193,6 +200,28 @@ async function listUnitsForManage(req, res) {
 
     const [rows] = await pool.query(sql, params);
 
+    const unitIds = rows.map((r) => r.unit_id);
+    const agentMap = new Map();
+    if (unitIds.length > 0) {
+      const placeholders = unitIds.map(() => '?').join(',');
+      const [uaRows] = await pool.query(
+        `SELECT ua.unit_id, ua.agent_user_id, up.username, u.first_name, u.last_name, u.email
+         FROM unit_agent ua
+         INNER JOIN user_profile up ON up.user_id = ua.agent_user_id
+         INNER JOIN \`user\` u ON u.user_id = ua.agent_user_id
+         WHERE ua.unit_id IN (${placeholders})`,
+        unitIds
+      );
+      for (const ua of uaRows) {
+        if (!agentMap.has(ua.unit_id)) agentMap.set(ua.unit_id, []);
+        agentMap.get(ua.unit_id).push({
+          id: String(ua.agent_user_id),
+          username: ua.username,
+          fullname: [ua.first_name, ua.last_name].filter(Boolean).join(' ') || ua.email,
+        });
+      }
+    }
+
     const units = rows.map((r) => ({
       id: String(r.unit_id),
       title: r.unit_name,
@@ -227,6 +256,7 @@ async function listUnitsForManage(req, res) {
             email: r.owner_email || '',
           }
         : null,
+      assigned_agents: agentMap.get(r.unit_id) || [],
     }));
 
     res.json(units);
@@ -312,6 +342,12 @@ async function updateUnitFull(req, res) {
         return res.status(400).json({ error: 'Each image must have a non-empty url string' });
     }
 
+    const assignedAgentIds = Array.isArray(body.assigned_agent_ids)
+      ? body.assigned_agent_ids
+          .map((id) => parseInt(String(id), 10))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+
     await pool.query(
       `UPDATE unit SET
         unit_name=?, location=?, city=?, country=?, bedroom_count=?, bathroom_count=?,
@@ -328,6 +364,15 @@ async function updateUnitFull(req, res) {
     );
 
     await pool.query('DELETE FROM unit_image WHERE unit_id = ?', [unitId]);
+
+    await pool.query('DELETE FROM unit_agent WHERE unit_id = ?', [unitId]);
+    if (assignedAgentIds.length > 0) {
+      const uaValues = assignedAgentIds.map((aid) => [unitId, aid]);
+      await pool.query(
+        'INSERT INTO unit_agent (unit_id, agent_user_id) VALUES ?',
+        [uaValues]
+      );
+    }
 
     if (images.length > 0) {
       const imgValues = images.map((img, idx) => [
@@ -449,28 +494,45 @@ async function updateUnit(req, res) {
       params.push(body.is_featured ? 1 : 0);
     }
 
-    if (updates.length === 0) {
+    if (body.assigned_agent_ids !== undefined) {
+      await pool.query('DELETE FROM unit_agent WHERE unit_id = ?', [unitId]);
+      const agentIds = Array.isArray(body.assigned_agent_ids)
+        ? body.assigned_agent_ids.map((id) => parseInt(String(id), 10)).filter((id) => Number.isFinite(id) && id > 0)
+        : [];
+      if (agentIds.length > 0) {
+        const uaValues = agentIds.map((aid) => [unitId, aid]);
+        await pool.query('INSERT INTO unit_agent (unit_id, agent_user_id) VALUES ?', [uaValues]);
+      }
+    }
+
+    if (updates.length === 0 && body.assigned_agent_ids === undefined) {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    params.push(unitId);
-    await pool.query(
-      `UPDATE unit SET ${updates.join(', ')} WHERE unit_id = ?`,
-      params
-    );
+    if (updates.length > 0) {
+      params.push(unitId);
+      await pool.query(
+        `UPDATE unit SET ${updates.join(', ')} WHERE unit_id = ?`,
+        params
+      );
+    }
 
     const [updated] = await pool.query(
       'SELECT unit_id, status, is_featured, updated_at FROM unit WHERE unit_id = ?',
       [unitId]
     );
 
-    res.json({
+    const resPayload = {
       id: String(unitId),
       status: updated[0].status,
       is_available: updated[0].status === 'available',
       is_featured: Boolean(updated[0].is_featured),
       updated_at: updated[0].updated_at,
-    });
+    };
+    if (body.assigned_agent_ids !== undefined) {
+      resPayload.assigned_agent_ids = body.assigned_agent_ids;
+    }
+    res.json(resPayload);
   } catch (error) {
     console.error('Update unit error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -577,6 +639,12 @@ async function createUnit(req, res) {
       ownerUserId = userId;
     }
 
+    const assignedAgentIds = Array.isArray(body.assigned_agent_ids)
+      ? body.assigned_agent_ids
+          .map((id) => parseInt(String(id), 10))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+
     // --- Images ---
     const images = Array.isArray(body.images) ? body.images : [];
     for (const img of images) {
@@ -601,6 +669,14 @@ async function createUnit(req, res) {
     );
 
     const newUnitId = result.insertId;
+
+    if (assignedAgentIds.length > 0) {
+      const uaValues = assignedAgentIds.map((aid) => [newUnitId, aid]);
+      await pool.query(
+        'INSERT INTO unit_agent (unit_id, agent_user_id) VALUES ?',
+        [uaValues]
+      );
+    }
 
     // --- Insert images if provided ---
     if (images.length > 0) {

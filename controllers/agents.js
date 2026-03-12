@@ -202,4 +202,143 @@ async function getNetwork(req, res) {
   }
 }
 
-module.exports = { getBalance, getBalanceHistory, getNetwork };
+/**
+ * GET /api/agents/list
+ * List agents (users with role=Agent who have a profile). For manage-units dropdown.
+ * Requires auth (Admin or Agent).
+ */
+async function listAgents(req, res) {
+  try {
+    const userId = req.user?.userId;
+    const roles = req.user?.roles || [];
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    const isAdmin = roles.includes('Admin');
+    const isAgent = roles.includes('Agent');
+    if (!isAdmin && !isAgent) return res.status(403).json({ error: 'Admin or Agent required' });
+
+    const search = (req.query.search || '').trim().toLowerCase();
+    let sql = `SELECT u.user_id, u.first_name, u.last_name, u.email, up.username
+       FROM \`user\` u
+       INNER JOIN user_role ur ON ur.user_id = u.user_id AND ur.status = 'active'
+       INNER JOIN role r ON r.role_id = ur.role_id AND r.role_name = 'Agent'
+       INNER JOIN user_profile up ON up.user_id = u.user_id
+       WHERE u.status = 'active'`;
+    const params = [];
+    if (search) {
+      sql += ' AND (up.username LIKE ? OR u.email LIKE ? OR CONCAT(u.first_name, \' \', u.last_name) LIKE ?)';
+      const like = `%${search}%`;
+      params.push(like, like, like);
+    }
+    sql += ' ORDER BY up.username ASC LIMIT 50';
+    const [rows] = await pool.query(sql, params);
+
+    const agents = rows.map((r) => ({
+      id: String(r.user_id),
+      fullname: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email,
+      email: r.email,
+      username: r.username,
+    }));
+
+    res.json(agents);
+  } catch (error) {
+    console.error('List agents error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+function parseJsonArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function mapUnitToResponse(r) {
+  return {
+    id: String(r.unit_id),
+    title: r.unit_name,
+    description: r.description,
+    price: Number(r.base_price),
+    price_unit: 'night',
+    currency: '₱',
+    location: r.location || '',
+    city: r.city,
+    country: r.country,
+    bedrooms: r.bedroom_count,
+    bathrooms: r.bathroom_count,
+    square_feet: r.area_sqm ? Math.round(r.area_sqm * 10.764) : null,
+    property_type: r.unit_type,
+    main_image_url: r.main_image_url || null,
+    amenities: parseJsonArray(r.amenities) || [],
+    is_available: r.status === 'available',
+    is_featured: Boolean(r.is_featured),
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  };
+}
+
+const unitsSql = `
+  SELECT u.unit_id, u.unit_name, u.location, u.city, u.country,
+         u.bedroom_count, u.bathroom_count, u.area_sqm, u.unit_type,
+         u.description, u.amenities, u.min_pax, u.max_capacity,
+         u.base_price, u.excess_pax_fee, u.status, u.is_featured,
+         u.check_in_time, u.check_out_time, u.latitude, u.longitude,
+         u.created_at, u.updated_at,
+         (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url
+  FROM unit u
+  INNER JOIN unit_agent ua ON ua.unit_id = u.unit_id
+  WHERE u.status = 'available'
+`;
+
+/**
+ * GET /api/agents/me/properties
+ * List units assigned to the current agent. Requires auth.
+ */
+async function getMyProperties(req, res) {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const [rows] = await pool.query(
+      `${unitsSql} AND ua.agent_user_id = ? ORDER BY u.is_featured DESC, u.updated_at DESC`,
+      [userId]
+    );
+    res.json(rows.map(mapUnitToResponse));
+  } catch (error) {
+    console.error('Get my properties error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * GET /api/agents/:username/properties
+ * List units assigned to an agent by username. Public endpoint for agent profile page.
+ */
+async function getPropertiesByUsername(req, res) {
+  try {
+    const { username } = req.params;
+    if (!username || !username.trim()) {
+      return res.status(400).json({ error: 'Username required' });
+    }
+    const usernameClean = username.trim().toLowerCase();
+
+    const [rows] = await pool.query(
+      `${unitsSql} AND ua.agent_user_id IN (SELECT user_id FROM user_profile WHERE username = ?)
+       ORDER BY u.is_featured DESC, u.updated_at DESC`,
+      [usernameClean]
+    );
+    res.json(rows.map(mapUnitToResponse));
+  } catch (error) {
+    console.error('Get properties by username error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+module.exports = { getBalance, getBalanceHistory, getNetwork, listAgents, getMyProperties, getPropertiesByUsername };

@@ -7,7 +7,7 @@ function buildSpec(port) {
     info: {
       title: 'Auth Service API',
       version: '1.0.0',
-      description: 'Authentication, units, and bookings API with JWT tokens',
+      description: 'Authentication, units, bookings, agent registration, and agent commission API with JWT tokens',
       contact: { name: 'API Support' },
     },
     servers: [{ url: serverUrl, description: process.env.PUBLIC_URL ? 'Live server' : 'Local development' }],
@@ -371,6 +371,55 @@ function buildSpec(port) {
           },
         },
       },
+      '/api/agents/{username}': {
+        get: {
+          summary: 'Get agent profile by username',
+          tags: ['Agents'],
+          description: 'Get public agent profile by username. No auth required. Used by agent profile page.',
+          parameters: [
+            { name: 'username', in: 'path', required: true, schema: { type: 'string' }, description: 'Profile username (e.g. mokong)' },
+          ],
+          responses: {
+            200: {
+              description: 'Profile details',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'integer' },
+                      userId: { type: 'integer' },
+                      username: { type: 'string' },
+                      aboutMe: { type: 'string' },
+                      contactInfo: { type: 'string' },
+                      socialLinks: {
+                        type: 'object',
+                        properties: {
+                          facebook: { type: 'string', nullable: true },
+                          instagram: { type: 'string', nullable: true },
+                          twitter: { type: 'string', nullable: true },
+                          linkedin: { type: 'string', nullable: true },
+                          whatsapp: { type: 'string', nullable: true },
+                        },
+                      },
+                      profilePhotoUrl: { type: 'string', nullable: true },
+                      firstName: { type: 'string' },
+                      lastName: { type: 'string' },
+                      fullName: { type: 'string' },
+                      email: { type: 'string' },
+                      phone: { type: 'string', nullable: true },
+                      location: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Username required' },
+            404: { description: 'Profile not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
       '/api/units': {
         get: {
           summary: 'List units',
@@ -465,6 +514,11 @@ function buildSpec(port) {
                         },
                       },
                     },
+                    assigned_agent_ids: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'User IDs of agents to assign to this unit.',
+                    },
                   },
                 },
               },
@@ -525,8 +579,20 @@ function buildSpec(port) {
                         title: { type: 'string' },
                         status: { type: 'string', enum: ['available', 'unavailable', 'maintenance'] },
                         is_featured: { type: 'boolean' },
-                        owner: { type: 'string', nullable: true },
+                        owner: { type: 'object', nullable: true, properties: { id: { type: 'string' }, fullname: { type: 'string' }, email: { type: 'string' } } },
                         bookings_count: { type: 'integer' },
+                        assigned_agents: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              id: { type: 'string' },
+                              username: { type: 'string' },
+                              fullname: { type: 'string' },
+                            },
+                          },
+                          description: 'Agents assigned to this unit',
+                        },
                       },
                     },
                   },
@@ -583,6 +649,7 @@ function buildSpec(port) {
                       check_out_time: { type: 'string', nullable: true },
                       created_at: { type: 'string', format: 'date-time' },
                       updated_at: { type: 'string', format: 'date-time' },
+                      assigned_agent_ids: { type: 'array', items: { type: 'string' }, description: 'User IDs of assigned agents' },
                     },
                   },
                 },
@@ -637,6 +704,11 @@ function buildSpec(port) {
                         },
                       },
                     },
+                    assigned_agent_ids: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'User IDs of agents to assign. Replaces existing assignments.',
+                    },
                   },
                 },
               },
@@ -654,7 +726,7 @@ function buildSpec(port) {
         patch: {
           summary: 'Partial update unit',
           tags: ['Units'],
-          description: 'Update unit status or featured flag only. Admin or Agent only.',
+          description: 'Update unit status, featured flag, or assigned agents. Admin only.',
           security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Unit ID' },
@@ -667,13 +739,35 @@ function buildSpec(port) {
                   properties: {
                     status: { type: 'string', enum: ['available', 'unavailable', 'maintenance'] },
                     is_featured: { type: 'boolean' },
+                    assigned_agent_ids: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'User IDs of agents to assign. Replaces existing assignments.',
+                    },
                   },
                 },
               },
             },
           },
           responses: {
-            200: { description: 'Unit updated' },
+            200: {
+              description: 'Unit updated',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      status: { type: 'string', enum: ['available', 'unavailable', 'maintenance'] },
+                      is_available: { type: 'boolean' },
+                      is_featured: { type: 'boolean' },
+                      updated_at: { type: 'string', format: 'date-time' },
+                      assigned_agent_ids: { type: 'array', items: { type: 'string' }, description: 'Present when assigned_agent_ids was updated' },
+                    },
+                  },
+                },
+              },
+            },
             401: { description: 'Unauthorized' },
             403: { description: 'Forbidden' },
             404: { description: 'Unit not found' },
@@ -1081,6 +1175,366 @@ function buildSpec(port) {
             403: { description: 'Forbidden - not agent or Admin' },
             404: { description: 'Booking not found' },
             500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/register': {
+        post: {
+          summary: 'Submit agent registration (become-an-agent)',
+          tags: ['Agents'],
+          description: 'Submit an agent registration application. Two modes: (1) Unauthenticated: send fullname, email, phone, password, feeProof (file), recruitedBy (optional), agreeTerms. (2) Authenticated: send feeProof (file), recruitedBy (optional), agreeTerms. Content-Type: multipart/form-data.',
+          requestBody: {
+            required: true,
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    fullname: { type: 'string', description: 'Required when not authenticated' },
+                    email: { type: 'string', format: 'email', description: 'Required when not authenticated' },
+                    phone: { type: 'string', description: 'Required when not authenticated' },
+                    password: { type: 'string', description: 'Required when not authenticated' },
+                    recruitedBy: { type: 'string', description: 'Optional - Agent user ID (for agent_relationship)' },
+                    feeProof: { type: 'string', format: 'binary', description: 'Required - proof of payment (image or PDF, max 5MB)' },
+                    agreeTerms: { type: 'string', enum: ['true', 'false'], description: 'Required - must be true' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Application submitted successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { message: { type: 'string', example: 'Application submitted successfully' } },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation error - missing fields or invalid file',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { error: { type: 'string', example: 'Proof of payment file is required' } },
+                  },
+                },
+              },
+            },
+            409: {
+              description: 'Conflict - email already exists or already applied',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { error: { type: 'string' } },
+                  },
+                },
+              },
+            },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/me/registration': {
+        get: {
+          summary: 'Get my agent registration status',
+          tags: ['Agents'],
+          description: 'Check if the current user has submitted an agent registration. Requires auth.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'Registration status',
+              content: {
+                'application/json': {
+                  schema: {
+                    oneOf: [
+                      {
+                        type: 'object',
+                        properties: {
+                          hasRegistration: { type: 'boolean', example: false },
+                        },
+                      },
+                      {
+                        type: 'object',
+                        properties: {
+                          hasRegistration: { type: 'boolean', example: true },
+                          status: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+                          email: { type: 'string', format: 'email' },
+                          fullname: { type: 'string' },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            401: { description: 'Authorization required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/me/properties': {
+        get: {
+          summary: 'Get my properties',
+          tags: ['Agents'],
+          description: 'List units assigned to the current agent. Requires auth.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'List of units assigned to the agent',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        title: { type: 'string' },
+                        price: { type: 'number' },
+                        price_unit: { type: 'string', example: 'night' },
+                        currency: { type: 'string', example: '₱' },
+                        location: { type: 'string' },
+                        city: { type: 'string' },
+                        main_image_url: { type: 'string', nullable: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Authentication required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/{username}/properties': {
+        get: {
+          summary: 'Get agent properties by username',
+          tags: ['Agents'],
+          description: 'List units assigned to an agent by their profile username. Public endpoint for agent profile page.',
+          parameters: [
+            { name: 'username', in: 'path', required: true, schema: { type: 'string' }, description: 'Agent profile username' },
+          ],
+          responses: {
+            200: {
+              description: 'List of units assigned to the agent',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        title: { type: 'string' },
+                        price: { type: 'number' },
+                        main_image_url: { type: 'string', nullable: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Username required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/list': {
+        get: {
+          summary: 'List agents',
+          tags: ['Agents'],
+          description: 'List agents (users with role=Agent who have a profile). Admin only. For manage-units assign dropdown. Supports search by username, email, or name.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'search', in: 'query', required: false, schema: { type: 'string' }, description: 'Search by username, email, or full name' },
+          ],
+          responses: {
+            200: {
+              description: 'List of agents',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', description: 'User ID' },
+                        fullname: { type: 'string' },
+                        email: { type: 'string' },
+                        username: { type: 'string', description: 'Profile username for /agent/{username}' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/me/balance': {
+        get: {
+          summary: 'Get agent balance',
+          tags: ['Agents'],
+          description: 'Get current commission balance for the authenticated agent. Creates balance row with 0 if none exists.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'Agent balance',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      current_amount: { type: 'number', example: 1500.5 },
+                      updatedAt: { type: 'string', format: 'date-time' },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/me/balance-history': {
+        get: {
+          summary: 'Get agent balance history',
+          tags: ['Agents'],
+          description: 'Get add/remove ledger entries for the authenticated agent.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'Balance history entries',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        type: { type: 'string', enum: ['add', 'remove'] },
+                        amount: { type: 'number' },
+                        referenceType: { type: 'string', nullable: true },
+                        referenceId: { type: 'string', nullable: true },
+                        createdAt: { type: 'string', format: 'date-time' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/me/network': {
+        get: {
+          summary: 'Get agent referral network',
+          tags: ['Agents'],
+          description: 'Get referral tree and stats (sub-agents, network bookings, commissions) for the authenticated agent.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'Network tree and stats',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      tree: {
+                        type: 'object',
+                        properties: {
+                          agentId: { type: 'string' },
+                          agentName: { type: 'string' },
+                          email: { type: 'string' },
+                          referralCode: { type: 'string' },
+                          level: { type: 'integer' },
+                          status: { type: 'string', enum: ['active', 'inactive'] },
+                          joinedAt: { type: 'string', format: 'date-time' },
+                          totalCommissionsEarned: { type: 'number' },
+                          totalBookings: { type: 'integer' },
+                          children: { type: 'array', items: { type: 'object' } },
+                        },
+                      },
+                      stats: {
+                        type: 'object',
+                        properties: {
+                          totalSubAgents: { type: 'integer' },
+                          activeSubAgents: { type: 'integer' },
+                          networkBookings: { type: 'integer' },
+                          totalNetworkCommissions: { type: 'number' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/upload': {
+        post: {
+          summary: 'Upload images',
+          tags: ['Upload'],
+          description: 'Upload one or more images. Multipart form-data, field name "images" (up to 10 files). Admin or Agent only.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    images: {
+                      type: 'array',
+                      items: { type: 'string', format: 'binary' },
+                      description: 'Up to 10 image files (JPEG, PNG, WebP, GIF)',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Uploaded file URLs',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      urls: {
+                        type: 'array',
+                        items: { type: 'string', example: 'http://localhost:3001/uploads/1234567890-abc.jpg' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'No image files provided' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent required' },
+            500: { description: 'Upload failed' },
           },
         },
       },

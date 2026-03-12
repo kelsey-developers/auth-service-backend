@@ -9,7 +9,7 @@ router.post('/', requireAuth, requireAdminOrAgent, createUnit);
 router.get('/manage', requireAuth, requireAdminOrAgent, listUnitsForManage);
 router.get('/:id', getUnitById);
 router.put('/:id', requireAuth, requireAdminOrAgent, updateUnitFull);
-router.patch('/:id', requireAuth, requireAdminOrAgent, updateUnit);
+router.patch('/:id', requireAuth, requireAdmin, updateUnit);
 router.delete('/:id', requireAuth, requireAdmin, deleteUnit);
 
 module.exports = router;
