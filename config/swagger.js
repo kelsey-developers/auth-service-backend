@@ -1712,6 +1712,97 @@ function buildSpec(port) {
           },
         },
       },
+      '/api/admin/viewagent/{agentId}': {
+        get: {
+          summary: 'View agent profile and stats (Admin only)',
+          tags: ['Admin'],
+          description: 'Returns agent profile, wallet (available, pending, approved, totalPaid), commissions list, payouts, and network stats for a specific agent.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'agentId', in: 'path', required: true, schema: { type: 'integer' }, description: 'Agent user_id' },
+          ],
+          responses: {
+            200: {
+              description: 'Agent view data',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      agent: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string' },
+                          fullname: { type: 'string' },
+                          email: { type: 'string' },
+                          phone: { type: 'string' },
+                          username: { type: 'string' },
+                          status: { type: 'string', enum: ['active', 'inactive'] },
+                          joinedAt: { type: 'string', format: 'date-time', nullable: true },
+                        },
+                      },
+                      wallet: {
+                        type: 'object',
+                        properties: {
+                          available: { type: 'number', description: 'Balance (current_amount)' },
+                          pending: { type: 'number', description: 'Commission from penciled bookings' },
+                          approved: { type: 'number', description: 'Commission from confirmed bookings' },
+                          totalPaid: { type: 'number', description: 'Sum of payout_withdrawal where status=paid' },
+                        },
+                      },
+                      totalCommissions: { type: 'integer', description: 'Count of bookings (penciled, confirmed, completed)' },
+                      commissions: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            bookingRef: { type: 'string' },
+                            property: { type: 'string' },
+                            guest: { type: 'string' },
+                            status: { type: 'string', enum: ['penciled', 'confirmed', 'completed'] },
+                            commission: { type: 'number' },
+                            checkIn: { type: 'string', format: 'date', nullable: true },
+                            checkOut: { type: 'string', format: 'date', nullable: true },
+                            nights: { type: 'integer' },
+                            totalAmount: { type: 'number' },
+                          },
+                        },
+                      },
+                      payouts: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            id: { type: 'string' },
+                            amount: { type: 'number' },
+                            method: { type: 'string' },
+                            status: { type: 'string', enum: ['pending', 'paid', 'declined'] },
+                            requestedAt: { type: 'string', format: 'date-time' },
+                            proofOfPaymentUrl: { type: 'string', nullable: true },
+                          },
+                        },
+                      },
+                      network: {
+                        type: 'object',
+                        properties: {
+                          totalSubAgents: { type: 'integer' },
+                          activeSubAgents: { type: 'integer' },
+                          networkBookings: { type: 'integer' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Invalid agent ID' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            404: { description: 'Agent not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
       '/api/agents/me/network': {
         get: {
           summary: 'Get agent referral network',
