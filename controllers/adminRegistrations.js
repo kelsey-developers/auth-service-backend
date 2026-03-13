@@ -54,7 +54,8 @@ async function getRegistrations(req, res) {
 
 /**
  * PATCH /api/admin/registrations/:id/approve
- * Admin only. Approves a pending registration: sets status to 'approved' and adds Agent role.
+ * Admin only. Approves a pending registration: sets status to 'approved' and updates
+ * the user's existing user_role (role_id) to Agent instead of adding a new role row.
  */
 async function approveRegistration(req, res) {
   try {
@@ -95,9 +96,8 @@ async function approveRegistration(req, res) {
       if (roleRows.length > 0) {
         const agentRoleId = roleRows[0].role_id;
         await pool.query(
-          `INSERT INTO user_role (user_id, role_id) VALUES (?, ?)
-           ON DUPLICATE KEY UPDATE status = 'active'`,
-          [userId, agentRoleId]
+          `UPDATE user_role SET role_id = ?, status = 'active' WHERE user_id = ?`,
+          [agentRoleId, userId]
         );
       }
 
