@@ -7,7 +7,7 @@ function buildSpec(port) {
     info: {
       title: 'Auth Service API',
       version: '1.0.0',
-      description: 'Authentication, units, bookings, agent registration, and agent commission API with JWT tokens',
+      description: 'Authentication, units, bookings, agent registration, agent commission, and payout withdrawal API with JWT tokens',
       contact: { name: 'API Support' },
     },
     servers: [{ url: serverUrl, description: process.env.PUBLIC_URL ? 'Live server' : 'Local development' }],
@@ -17,6 +17,27 @@ function buildSpec(port) {
           type: 'http',
           scheme: 'bearer',
           bearerFormat: 'JWT',
+        },
+      },
+      schemas: {
+        Payout: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'payout_id' },
+            agentId: { type: 'string', description: 'agent user_id' },
+            agentName: { type: 'string' },
+            amount: { type: 'number' },
+            method: { type: 'string', enum: ['gcash', 'maya', 'bank_transfer'] },
+            recipientNumber: { type: 'string', nullable: true },
+            recipientName: { type: 'string', nullable: true },
+            bankName: { type: 'string', nullable: true },
+            accountNumber: { type: 'string', nullable: true },
+            status: { type: 'string', enum: ['pending', 'paid', 'declined'] },
+            proofOfPaymentUrl: { type: 'string', nullable: true },
+            notes: { type: 'string', nullable: true },
+            requestedAt: { type: 'string', format: 'date-time' },
+            processedAt: { type: 'string', format: 'date-time', nullable: true },
+          },
         },
       },
     },
@@ -259,6 +280,144 @@ function buildSpec(port) {
           },
         },
       },
+      '/api/profile/me': {
+        get: {
+          summary: 'Get my profile',
+          tags: ['Profile'],
+          description: 'Get the authenticated user\'s profile (username, aboutMe, socialLinks, etc.).',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'Profile or null if not set up',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      profile: {
+                        type: 'object',
+                        nullable: true,
+                        properties: {
+                          id: { type: 'integer' },
+                          userId: { type: 'integer' },
+                          username: { type: 'string' },
+                          aboutMe: { type: 'string' },
+                          contactInfo: { type: 'string' },
+                          socialLinks: {
+                            type: 'object',
+                            properties: {
+                              facebook: { type: 'string', nullable: true },
+                              instagram: { type: 'string', nullable: true },
+                              twitter: { type: 'string', nullable: true },
+                              linkedin: { type: 'string', nullable: true },
+                              whatsapp: { type: 'string', nullable: true },
+                            },
+                          },
+                          profilePhotoUrl: { type: 'string', nullable: true },
+                          firstName: { type: 'string' },
+                          lastName: { type: 'string' },
+                          email: { type: 'string' },
+                          phone: { type: 'string', nullable: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            500: { description: 'Internal server error' },
+          },
+        },
+        patch: {
+          summary: 'Update my profile',
+          tags: ['Profile'],
+          description: 'Update aboutMe and/or socialLinks for the authenticated user.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    aboutMe: { type: 'string', maxLength: 2000 },
+                    socialLinks: {
+                      type: 'object',
+                      properties: {
+                        facebook: { type: 'string', maxLength: 500 },
+                        instagram: { type: 'string', maxLength: 500 },
+                        twitter: { type: 'string', maxLength: 500 },
+                        linkedin: { type: 'string', maxLength: 500 },
+                        whatsapp: { type: 'string', maxLength: 500 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Profile updated' },
+            400: { description: 'No valid fields to update' },
+            401: { description: 'Unauthorized' },
+            404: { description: 'Profile not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/profile/setup': {
+        post: {
+          summary: 'Create my profile',
+          tags: ['Profile'],
+          description: 'Create a profile for the authenticated user. Username is required and must be unique.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['username'],
+                  properties: {
+                    username: { type: 'string', minLength: 2, maxLength: 50, example: 'johndoe' },
+                    aboutMe: { type: 'string', maxLength: 2000 },
+                    socialLinks: {
+                      type: 'object',
+                      properties: {
+                        facebook: { type: 'string', maxLength: 500 },
+                        instagram: { type: 'string', maxLength: 500 },
+                        twitter: { type: 'string', maxLength: 500 },
+                        linkedin: { type: 'string', maxLength: 500 },
+                        whatsapp: { type: 'string', maxLength: 500 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Profile created',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Profile created' },
+                      username: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Username required or invalid' },
+            401: { description: 'Unauthorized' },
+            409: { description: 'Profile already exists or username taken' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
       '/api/users': {
         get: {
           summary: 'List all users (Admin only)',
@@ -337,6 +496,7 @@ function buildSpec(port) {
                     firstName: { type: 'string', example: 'Juan' },
                     lastName: { type: 'string', example: 'Dela Cruz' },
                     email: { type: 'string', format: 'email', example: 'juan@example.com' },
+                    status: { type: 'string', enum: ['active', 'inactive', 'suspended'], example: 'active' },
                     role: { type: 'string', enum: ['Guest', 'Agent', 'Admin', 'Finance', 'Inventory', 'Housekeeping'], example: 'Agent' },
                   },
                 },
@@ -1096,6 +1256,72 @@ function buildSpec(port) {
           },
         },
       },
+      '/api/bookings/{id}/confirm': {
+        patch: {
+          summary: 'Confirm penciled booking (Admin only)',
+          tags: ['Bookings'],
+          description: 'Confirm a penciled booking (penciled → confirmed). Admin role required. Verifies payment if present.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Booking ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Booking confirmed',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      status: { type: 'string', example: 'confirmed' },
+                      confirmed_at: { type: 'string', format: 'date-time' },
+                      confirmed_by_user_id: { type: 'integer' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Only penciled bookings can be confirmed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            404: { description: 'Booking not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/bookings/{id}/decline': {
+        patch: {
+          summary: 'Decline penciled booking (Admin only)',
+          tags: ['Bookings'],
+          description: 'Decline a penciled booking (penciled → cancelled). Admin role required.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Booking ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Booking declined',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      status: { type: 'string', example: 'cancelled' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Only penciled bookings can be declined' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            404: { description: 'Booking not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
       '/api/bookings/{id}': {
         get: {
           summary: 'Get booking by ID or reference',
@@ -1442,6 +1668,50 @@ function buildSpec(port) {
           },
         },
       },
+      '/api/admin/analytics': {
+        get: {
+          summary: 'Get agent analytics (Admin only)',
+          tags: ['Admin'],
+          description: 'Returns totalAgents, activeAgents, totalCommissionsPaid (from payout_withdrawal status=paid, all time), totalCommissionsPending, and topAgents. Top agents are ranked by commission this month from balance_history (type=add, reference_type=booking).',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'Agent analytics',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      totalAgents: { type: 'integer' },
+                      activeAgents: { type: 'integer' },
+                      totalCommissionsPaid: { type: 'number', description: 'Sum of payout_withdrawal.status=paid (all time)' },
+                      totalCommissionsPending: { type: 'number' },
+                      topAgents: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            agentId: { type: 'string' },
+                            agentName: { type: 'string' },
+                            referralCode: { type: 'string' },
+                            totalCommissions: { type: 'number', description: 'This month only' },
+                            totalBookings: { type: 'integer', description: 'This month only' },
+                            activeSubAgents: { type: 'integer' },
+                          },
+                        },
+                      },
+                      monthlyCommissionData: { type: 'array', items: { type: 'object' } },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
       '/api/agents/me/network': {
         get: {
           summary: 'Get agent referral network',
@@ -1491,6 +1761,298 @@ function buildSpec(port) {
           },
         },
       },
+      '/api/agents/register/pending': {
+        get: {
+          summary: 'List all agent registrations (Admin only)',
+          tags: ['Agents'],
+          description: 'Get all agent registration applications from agent_registration table. Admin role required.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'List of registrations',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', description: 'agent_registration_id' },
+                        fullname: { type: 'string' },
+                        email: { type: 'string', format: 'email' },
+                        contactNumber: { type: 'string' },
+                        recruitedById: { type: 'string', nullable: true },
+                        recruitedByName: { type: 'string', nullable: true },
+                        registrationFeeStatus: { type: 'string', enum: ['paid', 'unpaid'] },
+                        status: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+                        appliedAt: { type: 'string', format: 'date-time' },
+                        proofOfPaymentUrl: { type: 'string', nullable: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/register/{id}/approve': {
+        patch: {
+          summary: 'Approve agent registration (Admin only)',
+          tags: ['Agents'],
+          description: 'Approve a pending registration. Sets status to approved and grants Agent role to the user.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'agent_registration_id' },
+          ],
+          responses: {
+            200: {
+              description: 'Registration approved',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      status: { type: 'string', example: 'approved' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Only pending registrations can be approved' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            404: { description: 'Registration not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/register/{id}/reject': {
+        patch: {
+          summary: 'Reject agent registration (Admin only)',
+          tags: ['Agents'],
+          description: 'Reject a pending registration. Sets status to rejected.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'agent_registration_id' },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    reason: { type: 'string', description: 'Reason for rejection (optional)' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Registration rejected',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      status: { type: 'string', example: 'rejected' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Only pending registrations can be rejected' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — Admin role required' },
+            404: { description: 'Registration not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/agents/payouts': {
+        get: {
+          summary: 'Get my payout requests',
+          tags: ['Agents'],
+          description: 'List payout withdrawal requests for the authenticated agent. Ordered by requested_at DESC.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'List of payouts',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/Payout' },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+        post: {
+          summary: 'Request payout withdrawal',
+          tags: ['Agents'],
+          description: 'Create a payout request. Deducts amount from agent balance. Requires sufficient balance.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['amount', 'method', 'recipientName'],
+                  properties: {
+                    amount: { type: 'number', minimum: 0.01, example: 5000 },
+                    method: { type: 'string', enum: ['gcash', 'maya', 'bank_transfer'] },
+                    recipientNumber: { type: 'string', example: '09171234567', description: 'Required for gcash/maya' },
+                    recipientName: { type: 'string', example: 'Juan Dela Cruz' },
+                    bankName: { type: 'string', example: 'BDO', description: 'Required for bank_transfer' },
+                    accountNumber: { type: 'string', example: '1234567890', description: 'Required for bank_transfer' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Payout request created',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/Payout' },
+                },
+              },
+            },
+            400: {
+              description: 'Validation error or insufficient balance',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { error: { type: 'string', example: 'Insufficient balance' } },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/admin/payouts': {
+        get: {
+          summary: 'Get all payout requests (Admin only)',
+          tags: ['Admin'],
+          description: 'List all payout withdrawal requests. Ordered by pending first, then requested_at ASC.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['pending', 'paid', 'declined'] }, description: 'Filter by status' },
+            { name: 'agentId', in: 'query', schema: { type: 'string' }, description: 'Filter by agent user ID' },
+          ],
+          responses: {
+            200: {
+              description: 'List of payouts',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/Payout' },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin role required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/admin/payouts/{id}': {
+        patch: {
+          summary: 'Mark payout as paid (Admin only)',
+          tags: ['Admin'],
+          description: 'Mark a pending payout as paid. Upload proof first via POST /api/upload/proof, then pass proofOfPaymentUrl here.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'integer' }, description: 'payout_id' },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    proofOfPaymentUrl: { type: 'string', description: 'URL from POST /api/upload/proof' },
+                    notes: { type: 'string', description: 'Optional note to agent' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Payout updated',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/Payout' },
+                },
+              },
+            },
+            400: { description: 'Payout already processed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin role required' },
+            404: { description: 'Payout not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/admin/payouts/{id}/decline': {
+        patch: {
+          summary: 'Decline payout (Admin only)',
+          tags: ['Admin'],
+          description: 'Decline a pending payout. Refunds the amount to the agent balance.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'integer' }, description: 'payout_id' },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    notes: { type: 'string', description: 'Optional reason for the agent' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Payout declined and refunded',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/Payout' },
+                },
+              },
+            },
+            400: { description: 'Payout already processed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin role required' },
+            404: { description: 'Payout not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
       '/api/upload': {
         post: {
           summary: 'Upload images',
@@ -1534,6 +2096,46 @@ function buildSpec(port) {
             400: { description: 'No image files provided' },
             401: { description: 'Unauthorized' },
             403: { description: 'Forbidden - Admin or Agent required' },
+            500: { description: 'Upload failed' },
+          },
+        },
+      },
+      '/api/upload/proof': {
+        post: {
+          summary: 'Upload payout proof file',
+          tags: ['Upload'],
+          description: 'Upload a single proof file (image or PDF) for payout proof of payment. Admin only. Use the returned URL in PATCH /api/admin/payouts/:id.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    proof: { type: 'string', format: 'binary', description: 'Proof image or PDF (max 5MB)' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Uploaded file URL',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      url: { type: 'string', example: 'http://localhost:3002/uploads/payout_proof/payout-1234567890-abc.jpg' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'No proof file provided' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin role required' },
             500: { description: 'Upload failed' },
           },
         },

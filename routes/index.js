@@ -6,6 +6,7 @@ const uploadRoutes = require('./upload');
 const userRoutes = require('./users');
 const agentRoutes = require('./agents');
 const profileRoutes = require('./profile');
+const adminRoutes = require('./admin');
 
 function mountRoutes(app) {
   app.use('/', statusRoutes);
@@ -16,6 +17,7 @@ function mountRoutes(app) {
   app.use('/api/users', userRoutes);
   app.use('/api/agents', agentRoutes);
   app.use('/api/profile', profileRoutes);
+  app.use('/api/admin', adminRoutes);
 }
 
 module.exports = { mountRoutes };

@@ -275,7 +275,9 @@ async function getBookingById(req, res) {
     const guestsOverMax = Math.max(0, pax - maxCapacity);
     const baseTotal = basePricePerNight * Math.max(1, nights);
     const excessOverCapacityFees = guestsOverMax * excessPaxFee * Math.max(1, nights);
-    const totalAmount = baseTotal + excessOverCapacityFees;
+    const totalAmount = row.deposit_amount != null && row.payment_id
+      ? Number(row.deposit_amount)
+      : baseTotal + excessOverCapacityFees;
 
     const agentFullname = row.agent_first_name || row.agent_last_name
       ? [row.agent_first_name, row.agent_middle_name, row.agent_last_name].filter(Boolean).join(' ')
@@ -510,8 +512,12 @@ async function getAllBookings(req, res) {
     const total = Number(countRows[0].total) || 0;
     const totalPages = Math.ceil(total / limit);
 
+    const orderClause = statusFilter === 'penciled'
+      ? 'ORDER BY COALESCE(b.penciled_at, b.created_at) ASC'
+      : 'ORDER BY b.created_at DESC';
+
     const [rows] = await pool.query(
-      `SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status, b.created_at,
+      `SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status, b.created_at, b.penciled_at,
               u.unit_id, u.unit_name, u.location, u.base_price, u.excess_pax_fee, u.min_pax, u.max_capacity,
               (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
               g.first_name AS guest_first_name, g.last_name AS guest_last_name,
@@ -525,7 +531,7 @@ async function getAllBookings(req, res) {
        LEFT JOIN \`user\` a ON a.user_id = b.agent_user_id
        LEFT JOIN payment p ON p.booking_id = b.booking_id
        WHERE ${where}
-       ORDER BY b.created_at DESC
+       ${orderClause}
        LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
@@ -558,6 +564,7 @@ async function getAllBookings(req, res) {
         raw_status: r.booking_status,
         total_amount: totalAmount,
         created_at: r.created_at,
+        penciled_at: r.penciled_at,
         listing: {
           id: String(r.unit_id),
           title: r.unit_name || '',
@@ -616,4 +623,139 @@ function mapPaymentMethod(method) {
   return map[method] || 'other';
 }
 
-module.exports = { getBookings, getMyBookings, getAllBookings, getBookingById, createBooking };
+/**
+ * PATCH /api/bookings/:id/confirm
+ * Admin only. Confirms a penciled booking: sets status to 'confirmed', confirmed_at = NOW(), confirmed_by_user_id = current user.
+ */
+async function confirmBooking(req, res) {
+  try {
+    const roles = req.user?.roles || [];
+    if (!roles.includes('Admin')) {
+      return res.status(403).json({ error: 'Admin role required' });
+    }
+
+    const bookingId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(bookingId)) {
+      return res.status(400).json({ error: 'Invalid booking ID' });
+    }
+
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT booking_id, booking_status FROM booking WHERE booking_id = ?`,
+      [bookingId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    if (rows[0].booking_status !== 'penciled') {
+      return res.status(400).json({ error: 'Only penciled bookings can be confirmed' });
+    }
+
+    await pool.query(
+      `UPDATE booking
+       SET booking_status = 'confirmed', confirmed_at = NOW(), confirmed_by_user_id = ?
+       WHERE booking_id = ?`,
+      [userId, bookingId]
+    );
+
+    await pool.query(
+      `INSERT INTO booking_status_history (booking_id, from_status, to_status, changed_by_user_id)
+       VALUES (?, 'penciled', 'confirmed', ?)`,
+      [bookingId, userId]
+    );
+
+    // Update payment status to verified when confirming
+    const [paymentRows] = await pool.query(
+      `SELECT payment_id, payment_status FROM payment WHERE booking_id = ?`,
+      [bookingId]
+    );
+    if (paymentRows.length > 0) {
+      const paymentId = paymentRows[0].payment_id;
+      const fromStatus = paymentRows[0].payment_status || 'pending';
+      await pool.query(
+        `UPDATE payment SET payment_status = 'verified', verified_at = NOW(), verified_by_user_id = ? WHERE booking_id = ?`,
+        [userId, bookingId]
+      );
+      await pool.query(
+        `INSERT INTO payment_status_history (payment_id, from_status, to_status, changed_by_user_id)
+         VALUES (?, ?, 'verified', ?)`,
+        [paymentId, fromStatus, userId]
+      );
+    }
+
+    res.json({
+      id: String(bookingId),
+      status: 'confirmed',
+      confirmed_at: new Date().toISOString(),
+      confirmed_by_user_id: userId,
+    });
+  } catch (error) {
+    console.error('Confirm booking error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * PATCH /api/bookings/:id/decline
+ * Admin only. Declines a penciled booking: sets status to 'cancelled'.
+ */
+async function declineBooking(req, res) {
+  try {
+    const roles = req.user?.roles || [];
+    if (!roles.includes('Admin')) {
+      return res.status(403).json({ error: 'Admin role required' });
+    }
+
+    const bookingId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(bookingId)) {
+      return res.status(400).json({ error: 'Invalid booking ID' });
+    }
+
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT booking_id, booking_status FROM booking WHERE booking_id = ?`,
+      [bookingId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    if (rows[0].booking_status !== 'penciled') {
+      return res.status(400).json({ error: 'Only penciled bookings can be declined' });
+    }
+
+    const fromStatus = rows[0].booking_status;
+
+    await pool.query(
+      `UPDATE booking SET booking_status = 'cancelled' WHERE booking_id = ?`,
+      [bookingId]
+    );
+
+    await pool.query(
+      `INSERT INTO booking_status_history (booking_id, from_status, to_status, changed_by_user_id)
+       VALUES (?, ?, 'cancelled', ?)`,
+      [bookingId, fromStatus, userId]
+    );
+
+    res.json({
+      id: String(bookingId),
+      status: 'cancelled',
+    });
+  } catch (error) {
+    console.error('Decline booking error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+module.exports = { getBookings, getMyBookings, getAllBookings, getBookingById, createBooking, confirmBooking, declineBooking };

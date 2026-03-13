@@ -173,7 +173,7 @@ async function submitAgentRegistration(req, res) {
         if (referredByUserId) {
           await pool.query(
             `INSERT INTO agent_relationship (parent_agent_user_id, child_agent_user_id, level)
-             VALUES (?, ?, 1)`,
+             VALUES (?, ?, 2)`,
             [referredByUserId, userId]
           );
         }
@@ -195,7 +195,7 @@ async function submitAgentRegistration(req, res) {
       if (referredByUserId) {
         await pool.query(
           `INSERT INTO agent_relationship (parent_agent_user_id, child_agent_user_id, level)
-           VALUES (?, ?, 1)`,
+           VALUES (?, ?, 2)`,
           [referredByUserId, userId]
         );
       }

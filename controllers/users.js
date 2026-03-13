@@ -60,7 +60,11 @@ async function listUsers(req, res) {
         u.birth_date,
         u.status,
         u.created_at,
-        IF(COUNT(r.role_name) > 0, JSON_ARRAYAGG(r.role_name), JSON_ARRAY()) AS roles
+        IF(COUNT(r.role_name) > 0, JSON_ARRAYAGG(r.role_name), JSON_ARRAY()) AS roles,
+        (SELECT COUNT(*) FROM booking b WHERE b.agent_user_id = u.user_id) AS booking_count,
+        (SELECT COUNT(*) FROM agent_relationship ar WHERE ar.parent_agent_user_id = u.user_id) AS sub_agent_count,
+        (SELECT COALESCE(MAX(ar.level), 0) + 1 FROM agent_relationship ar WHERE ar.child_agent_user_id = u.user_id) AS agent_level,
+        (SELECT COALESCE(b.current_amount, 0) FROM balance b WHERE b.agent_user_id = u.user_id LIMIT 1) AS total_commissions
       FROM \`user\` u
       LEFT JOIN user_role ur ON ur.user_id = u.user_id AND ur.status = 'active'
       LEFT JOIN role r ON r.role_id = ur.role_id
@@ -73,19 +77,30 @@ async function listUsers(req, res) {
     const [[{ total }]] = await pool.query(countSql, params);
     const [rows] = await pool.query(dataSql, [...params, limitNum, offset]);
 
-    const users = rows.map((u) => ({
-      id: u.user_id,
-      firstName: u.first_name,
-      lastName: u.last_name,
-      fullname: `${u.first_name} ${u.last_name}`.trim(),
-      email: u.email,
-      phone: u.phone,
-      gender: u.gender,
-      birthDate: u.birth_date,
-      status: u.status,
-      createdAt: u.created_at,
-      roles: typeof u.roles === 'string' ? JSON.parse(u.roles) : (u.roles ?? []),
-    }));
+    const users = rows.map((u) => {
+      const roles = typeof u.roles === 'string' ? JSON.parse(u.roles) : (u.roles ?? []);
+      const isAgent = roles.includes('Agent');
+      const level = Math.min(3, Math.max(1, parseInt(u.agent_level, 10) || 1));
+      return {
+        id: u.user_id,
+        firstName: u.first_name,
+        lastName: u.last_name,
+        fullname: `${u.first_name} ${u.last_name}`.trim(),
+        email: u.email,
+        phone: u.phone,
+        gender: u.gender,
+        birthDate: u.birth_date,
+        status: u.status,
+        createdAt: u.created_at,
+        roles,
+        ...(isAgent && {
+          bookingCount: parseInt(u.booking_count, 10) || 0,
+          subAgentCount: parseInt(u.sub_agent_count, 10) || 0,
+          agentLevel: level,
+          totalCommissions: Number(u.total_commissions) || 0,
+        }),
+      };
+    });
 
     res.json({
       users,
@@ -105,7 +120,7 @@ async function updateUser(req, res) {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
-    const { firstName, lastName, email, role } = req.body;
+    const { firstName, lastName, email, role, status } = req.body;
 
     const [existing] = await pool.query(
       'SELECT user_id FROM `user` WHERE user_id = ?',
@@ -117,6 +132,15 @@ async function updateUser(req, res) {
 
     const updates = [];
     const updateParams = [];
+
+    if (status !== undefined) {
+      const v = String(status).toLowerCase();
+      if (v !== 'active' && v !== 'inactive' && v !== 'suspended') {
+        return res.status(400).json({ error: 'Status must be active, inactive, or suspended' });
+      }
+      updates.push('status = ?');
+      updateParams.push(v);
+    }
 
     if (firstName !== undefined) {
       const v = String(firstName).trim();
