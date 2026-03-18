@@ -8,6 +8,7 @@ const { port } = require('./config/config');
 const { setupSwagger } = require('./config/swagger');
 const { mountRoutes } = require('./routes');
 const { run: runCompleteBookingsAndCommission } = require('./jobs/completeBookingsAndCommission');
+const { run: runCancelPenciledBookingsPastCheckin } = require('./jobs/cancelPenciledBookingsPastCheckin');
 
 const app = express();
 
@@ -35,8 +36,12 @@ app.listen(port, async () => {
     if (result.completed > 0 || result.commissionsAdded > 0) {
       console.log(`[Cron] completeBookingsAndCommission (startup): ${result.completed} completed, ${result.commissionsAdded} commissions added`);
     }
+    const cancelResult = await runCancelPenciledBookingsPastCheckin();
+    if (cancelResult.cancelled > 0) {
+      console.log(`[Cron] cancelPenciledBookingsPastCheckin (startup): ${cancelResult.cancelled} cancelled`);
+    }
   } catch (err) {
-    console.error('[Cron] completeBookingsAndCommission (startup) error:', err);
+    console.error('[Cron] startup error:', err);
   }
 });
 
@@ -47,7 +52,11 @@ cron.schedule('0 1 * * *', async () => {
     if (result.completed > 0 || result.commissionsAdded > 0) {
       console.log(`[Cron] completeBookingsAndCommission: ${result.completed} completed, ${result.commissionsAdded} commissions added`);
     }
+    const cancelResult = await runCancelPenciledBookingsPastCheckin();
+    if (cancelResult.cancelled > 0) {
+      console.log(`[Cron] cancelPenciledBookingsPastCheckin: ${cancelResult.cancelled} cancelled`);
+    }
   } catch (err) {
-    console.error('[Cron] completeBookingsAndCommission error:', err);
+    console.error('[Cron] error:', err);
   }
 }, { timezone: 'Asia/Manila' });

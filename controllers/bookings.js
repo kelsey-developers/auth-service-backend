@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const { computeSubtotalWithPricing } = require('../utils/unitPricing');
 
 const PH_TZ = 'Asia/Manila';
 
@@ -54,7 +55,24 @@ async function getBookings(req, res) {
       status: r.booking_status,
     }));
 
-    res.json(bookings);
+    // Include blocked dates as "booked" so they appear unavailable
+    const [blockRows] = await pool.query(
+      `SELECT block_id, start_date, end_date, reason
+       FROM unit_block_dates
+       WHERE (unit_id = ? OR unit_id IS NULL)
+       ORDER BY start_date`,
+      [listingId]
+    );
+
+    const blockedAsBookings = blockRows.map((r) => ({
+      id: `block-${r.block_id}`,
+      check_in_date: toDateOnly(r.start_date) || r.start_date,
+      check_out_date: toDateOnly(r.end_date) || r.end_date,
+      status: 'blocked',
+      reason: r.reason,
+    }));
+
+    res.json([...bookings, ...blockedAsBookings]);
   } catch (error) {
     console.error('Get bookings error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -91,7 +109,7 @@ async function createBooking(req, res) {
       return res.status(400).json({ error: 'check_out_date must be after check_in_date' });
     }
 
-    // Fetch unit pricing from DB (never trust client for amounts)
+    // Fetch unit and unit_pricing from DB (never trust client for amounts)
     const [unitRows] = await connection.query(
       `SELECT base_price, excess_pax_fee, min_pax, max_capacity FROM unit WHERE unit_id = ?`,
       [unitId]
@@ -105,15 +123,33 @@ async function createBooking(req, res) {
     const minPax = parseInt(unit.min_pax, 10) || 1;
     const maxCapacity = parseInt(unit.max_capacity, 10) || minPax;
 
-    // Calculate nights and total server-side
-    const checkInDate = new Date(checkIn);
-    const checkOutDate = new Date(checkOut);
-    const nights = Math.max(0, Math.round((checkOutDate - checkInDate) / (24 * 60 * 60 * 1000)));
-    const baseTotal = basePricePerNight * Math.max(1, nights);
-    // When total_guests exceeds max_capacity, charge excess_pax_fee per guest over capacity per night
+    // Fetch unit_pricing (stay_length_discount + holiday_pricing)
+    const [pricingRows] = await connection.query(
+      `SELECT pricing_type, rule_data FROM unit_pricing WHERE unit_id = ? ORDER BY sort_order ASC`,
+      [unitId]
+    );
+    const discountRules = [];
+    const holidayPricingRules = [];
+    for (const pr of pricingRows) {
+      try {
+        const data = typeof pr.rule_data === 'string' ? JSON.parse(pr.rule_data) : pr.rule_data;
+        const rule = { ...data };
+        if (pr.pricing_type === 'stay_length_discount') discountRules.push(rule);
+        else if (pr.pricing_type === 'holiday_pricing') holidayPricingRules.push(rule);
+      } catch (_) { /* skip invalid JSON */ }
+    }
+
+    // Calculate total: accommodation (with holiday + stay-length discount) + excess pax fees
+    const { subtotal: accommodationSubtotal, nights } = computeSubtotalWithPricing(
+      basePricePerNight,
+      checkIn,
+      checkOut,
+      discountRules,
+      holidayPricingRules
+    );
     const guestsOverMax = Math.max(0, pax - maxCapacity);
     const excessOverCapacityFees = guestsOverMax * excessPaxFee * Math.max(1, nights);
-    const totalAmount = baseTotal + excessOverCapacityFees;
+    const totalAmount = Math.round(accommodationSubtotal + excessOverCapacityFees);
 
     // Check for overlapping bookings
     const [existing] = await connection.query(
@@ -130,6 +166,26 @@ async function createBooking(req, res) {
         return res.status(409).json({
           error: 'Dates overlap with an existing booking. Please choose different dates.',
           overlapping: true,
+        });
+      }
+    }
+
+    // Check for overlapping blocked dates (unit-specific or global)
+    const [blockRows] = await connection.query(
+      `SELECT start_date, end_date, reason FROM unit_block_dates
+       WHERE (unit_id = ? OR unit_id IS NULL)`,
+      [unitId]
+    );
+
+    for (const row of blockRows) {
+      const blockStart = toDateOnly(row.start_date);
+      const blockEnd = toDateOnly(row.end_date);
+      if (!blockStart || !blockEnd) continue;
+      if (rangesOverlap(checkIn, checkOut, blockStart, blockEnd)) {
+        return res.status(409).json({
+          error: 'Dates overlap with a blocked period. Please choose different dates.',
+          overlapping: true,
+          blocked: true,
         });
       }
     }
@@ -262,8 +318,8 @@ async function getBookingById(req, res) {
       return res.status(403).json({ error: 'You do not have access to this booking' });
     }
 
-    const checkIn = row.checkin_date;
-    const checkOut = row.checkout_date;
+    const checkIn = toDateOnly(row.checkin_date) || row.checkin_date;
+    const checkOut = toDateOnly(row.checkout_date) || row.checkout_date;
     const nights = checkIn && checkOut
       ? Math.max(0, Math.round((new Date(checkOut) - new Date(checkIn)) / (24 * 60 * 60 * 1000)))
       : 0;
@@ -273,11 +329,35 @@ async function getBookingById(req, res) {
     const maxCapacity = parseInt(row.max_capacity, 10) || parseInt(row.min_pax, 10) || 1;
     const pax = parseInt(row.pax, 10) || 1;
     const guestsOverMax = Math.max(0, pax - maxCapacity);
-    const baseTotal = basePricePerNight * Math.max(1, nights);
     const excessOverCapacityFees = guestsOverMax * excessPaxFee * Math.max(1, nights);
+
+    // Fetch unit_pricing and compute accommodation breakdown (holiday + stay-length discount)
+    const [pricingRows] = await pool.query(
+      `SELECT pricing_type, rule_data FROM unit_pricing WHERE unit_id = ? ORDER BY sort_order ASC`,
+      [row.unit_id]
+    );
+    const discountRules = [];
+    const holidayPricingRules = [];
+    for (const pr of pricingRows) {
+      try {
+        const data = typeof pr.rule_data === 'string' ? JSON.parse(pr.rule_data) : pr.rule_data;
+        const rule = { ...data };
+        if (pr.pricing_type === 'stay_length_discount') discountRules.push(rule);
+        else if (pr.pricing_type === 'holiday_pricing') holidayPricingRules.push(rule);
+      } catch (_) { /* skip invalid JSON */ }
+    }
+
+    const { subtotal: accommodationSubtotal, stayLengthDiscountAmount, subtotalBeforeDiscount } = computeSubtotalWithPricing(
+      basePricePerNight,
+      checkIn,
+      checkOut,
+      discountRules,
+      holidayPricingRules
+    );
+
     const totalAmount = row.deposit_amount != null && row.payment_id
       ? Number(row.deposit_amount)
-      : baseTotal + excessOverCapacityFees;
+      : Math.round(accommodationSubtotal + excessOverCapacityFees);
 
     const agentFullname = row.agent_first_name || row.agent_last_name
       ? [row.agent_first_name, row.agent_middle_name, row.agent_last_name].filter(Boolean).join(' ')
@@ -301,9 +381,10 @@ async function getBookingById(req, res) {
       total_guests: pax,
       excess_pax_charge: excessOverCapacityFees,
       unit_charge: basePricePerNight,
+      subtotal_before_discount: Math.round(subtotalBeforeDiscount),
+      discount: Math.round(stayLengthDiscountAmount),
       amenities_charge: 0,
       service_charge: 0,
-      discount: 0,
       total_amount: totalAmount,
       currency: 'PHP',
       status: mapBookingStatus(row.booking_status),
@@ -370,7 +451,7 @@ async function getMyBookings(req, res) {
       : null;
 
     let sql = `
-      SELECT b.booking_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status,
+      SELECT b.booking_id, b.unit_id, b.reference_code, b.checkin_date, b.checkout_date, b.pax, b.booking_status,
              u.unit_name, u.location, u.base_price,
              (SELECT image_url FROM unit_image WHERE unit_id = u.unit_id ORDER BY is_main DESC, sort_order ASC LIMIT 1) AS main_image_url,
              g.first_name AS guest_first_name, g.last_name AS guest_last_name,
@@ -410,6 +491,7 @@ async function getMyBookings(req, res) {
 
       return {
         id: String(r.booking_id),
+        unit_id: String(r.unit_id),
         reference_code: r.reference_code || `BKG-${String(r.booking_id).padStart(6, '0')}`,
         check_in_date: toDateOnly(checkIn) || checkIn,
         check_out_date: toDateOnly(checkOut) || checkOut,
@@ -453,7 +535,7 @@ async function getMyBookings(req, res) {
  *   status    - penciled | confirmed | cancelled | completed
  *   unit_id   - filter by unit
  *   agent_id  - filter by agent user
- *   search    - reference_code OR client first/last name
+ *   search    - reference_code, client first/last name, agent first/last name, OR unit name
  */
 async function getAllBookings(req, res) {
   try {
@@ -491,10 +573,10 @@ async function getAllBookings(req, res) {
     }
     if (search) {
       conditions.push(
-        '(b.reference_code LIKE ? OR g.first_name LIKE ? OR g.last_name LIKE ? OR a.first_name LIKE ? OR a.last_name LIKE ?)'
+        '(b.reference_code LIKE ? OR g.first_name LIKE ? OR g.last_name LIKE ? OR a.first_name LIKE ? OR a.last_name LIKE ? OR u.unit_name LIKE ?)'
       );
       const like = `%${search}%`;
-      params.push(like, like, like, like, like);
+      params.push(like, like, like, like, like, like);
     }
 
     const where = conditions.join(' AND ');

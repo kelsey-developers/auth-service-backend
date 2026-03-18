@@ -7,7 +7,7 @@ function buildSpec(port) {
     info: {
       title: 'Auth Service API',
       version: '1.0.0',
-      description: 'Authentication, units, bookings, agent registration, agent commission, and payout withdrawal API with JWT tokens',
+      description: 'Authentication, units, bookings, calendar (blocked dates, pricing rules), agent registration, agent commission, and payout withdrawal API with JWT tokens',
       contact: { name: 'API Support' },
     },
     servers: [{ url: serverUrl, description: process.env.PUBLIC_URL ? 'Live server' : 'Local development' }],
@@ -970,13 +970,13 @@ function buildSpec(port) {
         get: {
           summary: 'List bookings for a listing',
           tags: ['Bookings'],
-          description: 'Get bookings for a listing (unit) by listingId. Used for availability/calendar.',
+          description: 'Get bookings for a listing (unit) by listingId. Includes blocked date ranges as items with status `blocked` so they appear unavailable. Used for availability/calendar.',
           parameters: [
             { name: 'listingId', in: 'query', required: true, schema: { type: 'string' }, description: 'Unit/listing ID' },
           ],
           responses: {
             200: {
-              description: 'List of bookings for the listing',
+              description: 'List of bookings and blocked ranges for the listing',
               content: {
                 'application/json': {
                   schema: {
@@ -984,10 +984,11 @@ function buildSpec(port) {
                     items: {
                       type: 'object',
                       properties: {
-                        id: { type: 'string' },
+                        id: { type: 'string', description: 'Booking ID or block-{block_id} for blocked ranges' },
                         check_in_date: { type: 'string', format: 'date' },
                         check_out_date: { type: 'string', format: 'date' },
-                        status: { type: 'string', enum: ['penciled', 'confirmed'] },
+                        status: { type: 'string', enum: ['penciled', 'confirmed', 'blocked'] },
+                        reason: { type: 'string', description: 'Present when status is blocked' },
                       },
                     },
                   },
@@ -1001,7 +1002,7 @@ function buildSpec(port) {
         post: {
           summary: 'Create booking',
           tags: ['Bookings'],
-          description: 'Create a new booking. Admin or Agent only. Checks for overlapping dates. Returns reference_code.',
+          description: 'Create a new booking. Admin or Agent only. Checks for overlapping dates and blocked periods (unit_block_dates). Rejects if dates overlap an existing booking or blocked range. Returns reference_code.',
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -1062,7 +1063,7 @@ function buildSpec(port) {
             401: { description: 'Unauthorized' },
             403: { description: 'Forbidden - Admin or Agent required' },
             409: {
-              description: 'Conflict - dates overlap with existing booking',
+              description: 'Conflict - dates overlap with existing booking or blocked period',
               content: {
                 'application/json': {
                   schema: {
@@ -1070,6 +1071,7 @@ function buildSpec(port) {
                     properties: {
                       error: { type: 'string' },
                       overlapping: { type: 'boolean', example: true },
+                      blocked: { type: 'boolean', description: 'True when overlap is with a blocked date range' },
                     },
                   },
                 },
@@ -1171,7 +1173,7 @@ function buildSpec(port) {
             },
             { name: 'unit_id', in: 'query', schema: { type: 'integer' }, description: 'Filter by unit ID' },
             { name: 'agent_id', in: 'query', schema: { type: 'integer' }, description: 'Filter by agent user ID' },
-            { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search by reference code or client/agent name' },
+            { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search by reference code, client/agent name, or unit name' },
           ],
           responses: {
             200: {
@@ -1400,6 +1402,187 @@ function buildSpec(port) {
             400: { description: 'Invalid booking ID or reference' },
             403: { description: 'Forbidden - not agent or Admin' },
             404: { description: 'Booking not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/calendar/blocked-ranges': {
+        get: {
+          summary: 'List blocked date ranges',
+          tags: ['Calendar'],
+          description: 'Get blocked date ranges for unit(s). Use listingId for a single unit or unit_ids (comma-separated) for multiple. Returns global blocks (unit_id null) and unit-specific blocks.',
+          parameters: [
+            { name: 'listingId', in: 'query', schema: { type: 'string' }, description: 'Single unit ID' },
+            { name: 'unit_ids', in: 'query', schema: { type: 'string' }, description: 'Comma-separated unit IDs (e.g. 1,2,3)' },
+          ],
+          responses: {
+            200: {
+              description: 'List of blocked ranges',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        start_date: { type: 'string', format: 'date' },
+                        end_date: { type: 'string', format: 'date' },
+                        reason: { type: 'string' },
+                        scope: { type: 'string', enum: ['global', 'unit'] },
+                        source: { type: 'string', enum: ['manual', 'airbnb', 'booking.com', 'agoda', 'expedia', 'vrbo', 'walk_in', 'phone', 'other'] },
+                        guest_name: { type: 'string', nullable: true },
+                        unit_ids: { type: 'array', items: { type: 'string' }, description: 'Present when scope is unit' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            500: { description: 'Internal server error' },
+          },
+        },
+        post: {
+          summary: 'Create blocked date range',
+          tags: ['Calendar'],
+          description: 'Block dates for a unit or globally. Admin or Agent only.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['start_date', 'end_date', 'reason', 'scope'],
+                  properties: {
+                    start_date: { type: 'string', format: 'date' },
+                    end_date: { type: 'string', format: 'date' },
+                    reason: { type: 'string', example: 'Maintenance' },
+                    source: { type: 'string', enum: ['manual', 'airbnb', 'booking.com', 'agoda', 'expedia', 'vrbo', 'walk_in', 'phone', 'other'], default: 'manual' },
+                    guest_name: { type: 'string', nullable: true },
+                    scope: { type: 'string', enum: ['global', 'unit'] },
+                    unit_ids: { type: 'array', items: { type: 'string' }, description: 'Required when scope is unit' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: 'Block created' },
+            400: { description: 'Bad request - missing fields or unit_ids required when scope is unit' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/calendar/blocked-ranges/{id}': {
+        delete: {
+          summary: 'Delete blocked date range',
+          tags: ['Calendar'],
+          description: 'Remove a blocked date range. Admin or Agent only.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Block ID' },
+          ],
+          responses: {
+            204: { description: 'Block deleted' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Block not found' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/calendar/pricing-rules': {
+        get: {
+          summary: 'List holiday pricing rules',
+          tags: ['Calendar'],
+          description: 'Get holiday/special pricing rules from unit_pricing for unit(s). Use listingId or unit_ids.',
+          parameters: [
+            { name: 'listingId', in: 'query', schema: { type: 'string' }, description: 'Single unit ID' },
+            { name: 'unit_ids', in: 'query', schema: { type: 'string' }, description: 'Comma-separated unit IDs' },
+          ],
+          responses: {
+            200: {
+              description: 'List of pricing rules',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        unit_id: { type: 'string' },
+                        start_date: { type: 'string', format: 'date' },
+                        end_date: { type: 'string', format: 'date' },
+                        name: { type: 'string' },
+                        adjustmentType: { type: 'string', enum: ['increase', 'decrease'] },
+                        adjustmentMode: { type: 'string', enum: ['percentage', 'fixed'] },
+                        adjustmentPercent: { type: 'number', nullable: true },
+                        adjustmentAmount: { type: 'number', nullable: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            500: { description: 'Internal server error' },
+          },
+        },
+        post: {
+          summary: 'Create holiday pricing rule',
+          tags: ['Calendar'],
+          description: 'Add a holiday/special pricing rule. Admin or Agent only. Supports percentage or fixed price adjustment.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['start_date', 'end_date', 'name'],
+                  properties: {
+                    unit_id: { type: 'string', description: 'Single unit (alternative to unit_ids)' },
+                    unit_ids: { type: 'array', items: { type: 'string' }, description: 'Multiple units (for global scope)' },
+                    start_date: { type: 'string', format: 'date' },
+                    end_date: { type: 'string', format: 'date' },
+                    name: { type: 'string', example: 'Christmas' },
+                    adjustmentType: { type: 'string', enum: ['increase', 'decrease'], default: 'increase' },
+                    adjustmentMode: { type: 'string', enum: ['percentage', 'fixed'], default: 'percentage' },
+                    adjustmentPercent: { type: 'number', description: 'When adjustmentMode is percentage' },
+                    adjustmentAmount: { type: 'number', description: 'When adjustmentMode is fixed' },
+                    price: { type: 'number', description: 'Alias for adjustmentAmount when fixed' },
+                    percentage: { type: 'number', description: 'Alias for adjustmentPercent' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: 'Rule created' },
+            400: { description: 'Bad request - unit_id or unit_ids required' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden - Admin or Agent required' },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/api/calendar/pricing-rules/{id}': {
+        delete: {
+          summary: 'Delete pricing rule',
+          tags: ['Calendar'],
+          description: 'Remove a holiday pricing rule by rule id or unit_pricing_id. Admin or Agent only.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Rule id (from rule_data) or unit_pricing_id' },
+          ],
+          responses: {
+            204: { description: 'Rule deleted' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Rule not found' },
             500: { description: 'Internal server error' },
           },
         },

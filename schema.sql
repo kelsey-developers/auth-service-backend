@@ -12,6 +12,8 @@ DROP TABLE IF EXISTS payment;
 DROP TABLE IF EXISTS booking_status_history;
 DROP TABLE IF EXISTS guest_booking_info;
 DROP TABLE IF EXISTS booking;
+DROP TABLE IF EXISTS unit_block_dates;
+DROP TABLE IF EXISTS unit_pricing;
 DROP TABLE IF EXISTS unit_image;
 DROP TABLE IF EXISTS unit;
 DROP TABLE IF EXISTS user_role;
@@ -89,6 +91,8 @@ CREATE TABLE user_role (
 CREATE TABLE unit (
     unit_id               BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     unit_name             VARCHAR(150) NOT NULL,
+    tower_building        VARCHAR(150),
+    unit_number           VARCHAR(50),
     location              TEXT,
     city                  VARCHAR(100),
     country               VARCHAR(100),
@@ -126,6 +130,41 @@ CREATE TABLE unit (
         CHECK (excess_pax_fee >= 0),
     CONSTRAINT chk_unit_status
         CHECK (status IN ('available', 'unavailable', 'maintenance'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE unit_pricing (
+    unit_pricing_id       BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    unit_id               BIGINT NOT NULL,
+    pricing_type          VARCHAR(30) NOT NULL,
+    rule_data             JSON NOT NULL,
+    sort_order            INT NOT NULL DEFAULT 0,
+    created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_unit_pricing_unit
+        FOREIGN KEY (unit_id) REFERENCES unit(unit_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+
+    CONSTRAINT chk_unit_pricing_type
+        CHECK (pricing_type IN ('stay_length_discount', 'holiday_pricing'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE unit_block_dates (
+    block_id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    unit_id               BIGINT NULL,
+    start_date            DATE NOT NULL,
+    end_date              DATE NOT NULL,
+    reason                VARCHAR(255) NOT NULL DEFAULT 'Blocked',
+    source                VARCHAR(50) NOT NULL DEFAULT 'manual',
+    guest_name            VARCHAR(255) NULL,
+    created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_unit_block_dates_unit
+        FOREIGN KEY (unit_id) REFERENCES unit(unit_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT chk_unit_block_dates_dates
+        CHECK (end_date >= start_date),
+    CONSTRAINT chk_unit_block_dates_source
+        CHECK (source IN ('manual', 'airbnb', 'booking.com', 'agoda', 'expedia', 'vrbo', 'walk_in', 'phone', 'other'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE unit_image (
@@ -358,6 +397,12 @@ CREATE INDEX idx_unit_is_featured ON unit(is_featured);
 CREATE INDEX idx_unit_unit_type ON unit(unit_type);
 CREATE INDEX idx_unit_city ON unit(city);
 
+CREATE INDEX idx_unit_pricing_unit_id ON unit_pricing(unit_id);
+CREATE INDEX idx_unit_pricing_type ON unit_pricing(unit_id, pricing_type);
+
+CREATE INDEX idx_unit_block_dates_unit ON unit_block_dates(unit_id);
+CREATE INDEX idx_unit_block_dates_dates ON unit_block_dates(start_date, end_date);
+
 CREATE INDEX idx_unit_image_unit_id ON unit_image(unit_id);
 CREATE INDEX idx_unit_image_is_main ON unit_image(unit_id, is_main);
 
@@ -462,11 +507,11 @@ INSERT INTO role (role_name, description) VALUES
   ('Inventory', 'Access to Inventory section of Sales Report'),
   ('Housekeeping', 'Access to Housekeeping section of Sales Report');
 
-INSERT INTO unit (unit_name, location, city, country, bedroom_count, bathroom_count, area_sqm, unit_type, description, amenities, min_pax, max_capacity, base_price, excess_pax_fee, status, is_featured, check_in_time, check_out_time) VALUES
-  ('Luxury Beachfront Villa', 'Boracay, Aklan', 'Boracay', 'Philippines', 4, 3, 232, 'villa', 'Experience paradise in this stunning beachfront villa with panoramic ocean views, private pool, and direct beach access.', '["Beach Access","Private Pool","WiFi","Air Conditioning","Full Kitchen"]', 2, 10, 8500, 500, 'available', 1, '14:00', '11:00'),
-  ('Modern City Condo', 'Makati, Metro Manila', 'Makati', 'Philippines', 2, 2, 111, 'condo', 'Contemporary 2-bedroom condo in the heart of Manila. Walking distance to shopping malls and restaurants.', '["WiFi","Gym Access","Pool","Parking","Security"]', 1, 4, 3500, 200, 'available', 1, '14:00', '11:00'),
-  ('Cozy Mountain Retreat', 'Tagaytay, Cavite', 'Tagaytay', 'Philippines', 3, 2, 167, 'house', 'Escape to this charming mountain cabin surrounded by nature. Features fireplace and mountain views.', '["Fireplace","Mountain View","Garden","BBQ Area","Parking"]', 2, 6, 4200, 300, 'available', 1, '15:00', '10:00'),
-  ('Apartment in Davao', 'Medina, Apilaya Davao City', 'Davao City', 'Philippines', 2, 1, 74, 'apartment', 'A beautiful apartment complex in the heart of Davao City with modern amenities.', '["WiFi","Air Conditioning","Kitchen","Parking","TV","Washing Machine"]', 1, 4, 4320, 250, 'available', 1, '14:00', '11:00');
+INSERT INTO unit (unit_name, tower_building, unit_number, location, city, country, bedroom_count, bathroom_count, area_sqm, unit_type, description, amenities, min_pax, max_capacity, base_price, excess_pax_fee, status, is_featured, check_in_time, check_out_time) VALUES
+  ('Luxury Beachfront Villa', NULL, NULL, 'Boracay, Aklan', 'Boracay', 'Philippines', 4, 3, 232, 'villa', 'Experience paradise in this stunning beachfront villa with panoramic ocean views, private pool, and direct beach access.', '["Beach Access","Private Pool","WiFi","Air Conditioning","Full Kitchen"]', 2, 10, 8500, 500, 'available', 1, '14:00', '11:00'),
+  ('Modern City Condo', 'Tower A', '1204', 'Makati, Metro Manila', 'Makati', 'Philippines', 2, 2, 111, 'condo', 'Contemporary 2-bedroom condo in the heart of Manila. Walking distance to shopping malls and restaurants.', '["WiFi","Gym Access","Pool","Parking","Security"]', 1, 4, 3500, 200, 'available', 1, '14:00', '11:00'),
+  ('Cozy Mountain Retreat', NULL, 'Cabin 1', 'Tagaytay, Cavite', 'Tagaytay', 'Philippines', 3, 2, 167, 'house', 'Escape to this charming mountain cabin surrounded by nature. Features fireplace and mountain views.', '["Fireplace","Mountain View","Garden","BBQ Area","Parking"]', 2, 6, 4200, 300, 'available', 1, '15:00', '10:00'),
+  ('Apartment in Davao', 'Building 2', '301', 'Medina, Apilaya Davao City', 'Davao City', 'Philippines', 2, 1, 74, 'apartment', 'A beautiful apartment complex in the heart of Davao City with modern amenities.', '["WiFi","Air Conditioning","Kitchen","Parking","TV","Washing Machine"]', 1, 4, 4320, 250, 'available', 1, '14:00', '11:00');
 
 INSERT INTO unit_image (unit_id, image_url, is_main, sort_order) VALUES
   (1, '/heroimage.png', 1, 0),

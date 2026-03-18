@@ -84,7 +84,7 @@ async function getUnitById(req, res) {
     const { id } = req.params;
 
     const [rows] = await pool.query(
-      `SELECT u.unit_id, u.unit_name, u.location, u.city, u.country,
+      `SELECT u.unit_id, u.unit_name, u.tower_building, u.unit_number, u.location, u.city, u.country,
               u.bedroom_count, u.bathroom_count, u.area_sqm, u.unit_type,
               u.description, u.amenities, u.min_pax, u.max_capacity,
               u.base_price, u.excess_pax_fee, u.status, u.is_featured,
@@ -111,6 +111,21 @@ async function getUnitById(req, res) {
     );
     const assigned_agent_ids = agentRows.map((a) => String(a.agent_user_id));
 
+    const [pricingRows] = await pool.query(
+      'SELECT pricing_type, rule_data FROM unit_pricing WHERE unit_id = ? ORDER BY sort_order ASC',
+      [id]
+    );
+    const discount_rules = [];
+    const holiday_pricing_rules = [];
+    for (const pr of pricingRows) {
+      try {
+        const data = typeof pr.rule_data === 'string' ? JSON.parse(pr.rule_data) : pr.rule_data;
+        const rule = { ...data, id: data.id || `rule-${id}-${Date.now()}` };
+        if (pr.pricing_type === 'stay_length_discount') discount_rules.push(rule);
+        else if (pr.pricing_type === 'holiday_pricing') holiday_pricing_rules.push(rule);
+      } catch (_) { /* skip invalid JSON */ }
+    }
+
     const r = rows[0];
     const images = imgRows.map((i) => i.image_url);
     const mainImg = imgRows.find((i) => i.is_main)?.image_url || imgRows[0]?.image_url;
@@ -118,6 +133,8 @@ async function getUnitById(req, res) {
     const unit = {
       id: String(r.unit_id),
       title: r.unit_name,
+      tower_building: r.tower_building || null,
+      unit_number: r.unit_number || null,
       description: r.description,
       price: Number(r.base_price),
       price_unit: 'night',
@@ -145,6 +162,8 @@ async function getUnitById(req, res) {
       created_at: r.created_at,
       updated_at: r.updated_at,
       assigned_agent_ids,
+      discount_rules,
+      holiday_pricing_rules,
     };
 
     res.json(unit);
@@ -176,7 +195,7 @@ async function listUnitsForManage(req, res) {
     }
 
     let sql = `
-      SELECT u.unit_id, u.unit_name, u.location, u.city, u.country,
+      SELECT u.unit_id, u.unit_name, u.tower_building, u.unit_number, u.location, u.city, u.country,
              u.bedroom_count, u.bathroom_count, u.area_sqm, u.unit_type,
              u.description, u.amenities, u.min_pax, u.max_capacity,
              u.base_price, u.excess_pax_fee, u.status, u.is_featured,
@@ -196,11 +215,36 @@ async function listUnitsForManage(req, res) {
       params.push(userId);
     }
 
+    const search = req.query.search ? String(req.query.search).trim() : null;
+    if (search) {
+      sql += ' AND u.unit_name LIKE ?';
+      params.push(`%${search}%`);
+    }
+
     sql += ' ORDER BY u.updated_at DESC';
 
     const [rows] = await pool.query(sql, params);
 
     const unitIds = rows.map((r) => r.unit_id);
+    const pricingMap = new Map();
+    if (unitIds.length > 0) {
+      const ph = unitIds.map(() => '?').join(',');
+      const [pricingRows] = await pool.query(
+        `SELECT unit_id, pricing_type, rule_data FROM unit_pricing WHERE unit_id IN (${ph}) ORDER BY sort_order ASC`,
+        unitIds
+      );
+      for (const pr of pricingRows) {
+        if (!pricingMap.has(pr.unit_id)) pricingMap.set(pr.unit_id, { discount_rules: [], holiday_pricing_rules: [] });
+        const entry = pricingMap.get(pr.unit_id);
+        try {
+          const data = typeof pr.rule_data === 'string' ? JSON.parse(pr.rule_data) : pr.rule_data;
+          const rule = { ...data, id: data.id || `rule-${pr.unit_id}-${Date.now()}` };
+          if (pr.pricing_type === 'stay_length_discount') entry.discount_rules.push(rule);
+          else if (pr.pricing_type === 'holiday_pricing') entry.holiday_pricing_rules.push(rule);
+        } catch (_) { /* skip invalid JSON */ }
+      }
+    }
+
     const agentMap = new Map();
     if (unitIds.length > 0) {
       const placeholders = unitIds.map(() => '?').join(',');
@@ -222,42 +266,49 @@ async function listUnitsForManage(req, res) {
       }
     }
 
-    const units = rows.map((r) => ({
-      id: String(r.unit_id),
-      title: r.unit_name,
-      description: r.description,
-      price: Number(r.base_price),
-      price_unit: 'night',
-      currency: '₱',
-      location: r.location || '',
-      city: r.city,
-      country: r.country,
-      bedrooms: r.bedroom_count,
-      bathrooms: r.bathroom_count,
-      square_feet: r.area_sqm ? Math.round(r.area_sqm * 10.764) : null,
-      area_sqm: r.area_sqm ? Number(r.area_sqm) : null,
-      property_type: r.unit_type,
-      main_image_url: r.main_image_url || null,
-      image_urls: [],
-      amenities: parseJsonArray(r.amenities) || [],
-      is_available: r.status === 'available',
-      is_featured: Boolean(r.is_featured),
-      latitude: r.latitude ? Number(r.latitude) : null,
-      longitude: r.longitude ? Number(r.longitude) : null,
-      check_in_time: r.check_in_time,
-      check_out_time: r.check_out_time,
-      created_at: r.created_at,
-      updated_at: r.updated_at,
-      bookings_count: Number(r.bookings_count) || 0,
-      owner: r.owner_user_id
-        ? {
-            id: String(r.owner_user_id),
-            fullname: [r.owner_first_name, r.owner_last_name].filter(Boolean).join(' ') || 'N/A',
-            email: r.owner_email || '',
-          }
-        : null,
-      assigned_agents: agentMap.get(r.unit_id) || [],
-    }));
+    const units = rows.map((r) => {
+      const pricing = pricingMap.get(r.unit_id) || { discount_rules: [], holiday_pricing_rules: [] };
+      return {
+        id: String(r.unit_id),
+        title: r.unit_name,
+        tower_building: r.tower_building || null,
+        unit_number: r.unit_number || null,
+        description: r.description,
+        price: Number(r.base_price),
+        price_unit: 'night',
+        currency: '₱',
+        location: r.location || '',
+        city: r.city,
+        country: r.country,
+        bedrooms: r.bedroom_count,
+        bathrooms: r.bathroom_count,
+        square_feet: r.area_sqm ? Math.round(r.area_sqm * 10.764) : null,
+        area_sqm: r.area_sqm ? Number(r.area_sqm) : null,
+        property_type: r.unit_type,
+        main_image_url: r.main_image_url || null,
+        image_urls: [],
+        amenities: parseJsonArray(r.amenities) || [],
+        is_available: r.status === 'available',
+        is_featured: Boolean(r.is_featured),
+        latitude: r.latitude ? Number(r.latitude) : null,
+        longitude: r.longitude ? Number(r.longitude) : null,
+        check_in_time: r.check_in_time,
+        check_out_time: r.check_out_time,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        bookings_count: Number(r.bookings_count) || 0,
+        owner: r.owner_user_id
+          ? {
+              id: String(r.owner_user_id),
+              fullname: [r.owner_first_name, r.owner_last_name].filter(Boolean).join(' ') || 'N/A',
+              email: r.owner_email || '',
+            }
+          : null,
+        assigned_agents: agentMap.get(r.unit_id) || [],
+        discount_rules: pricing.discount_rules,
+        holiday_pricing_rules: pricing.holiday_pricing_rules,
+      };
+    });
 
     res.json(units);
   } catch (error) {
@@ -301,6 +352,9 @@ async function updateUnitFull(req, res) {
     const unit_name = body.unit_name != null ? String(body.unit_name).trim() : null;
     if (!unit_name || unit_name.length > 150)
       return res.status(400).json({ error: 'unit_name is required and must be 150 chars or fewer' });
+
+    const tower_building = body.tower_building != null ? String(body.tower_building).trim() || null : null;
+    const unit_number = body.unit_number != null ? String(body.unit_number).trim() || null : null;
 
     const parsedMinPax = parseInt(body.min_pax, 10);
     if (!Number.isFinite(parsedMinPax) || parsedMinPax < 1)
@@ -350,18 +404,58 @@ async function updateUnitFull(req, res) {
 
     await pool.query(
       `UPDATE unit SET
-        unit_name=?, location=?, city=?, country=?, bedroom_count=?, bathroom_count=?,
+        unit_name=?, tower_building=?, unit_number=?, location=?, city=?, country=?, bedroom_count=?, bathroom_count=?,
         area_sqm=?, unit_type=?, description=?, amenities=?, min_pax=?, max_capacity=?,
         base_price=?, excess_pax_fee=?, check_in_time=?, check_out_time=?,
         latitude=?, longitude=?
        WHERE unit_id=?`,
       [
-        unit_name, location, city, country, bedroomCount, bathroomCount,
+        unit_name, tower_building, unit_number, location, city, country, bedroomCount, bathroomCount,
         areaSqm, unitType, description, amenities, parsedMinPax, parsedMaxCap,
         parsedBasePrice, excessPaxFee, checkInTime, checkOutTime,
         latitude, longitude, unitId,
       ]
     );
+
+    await pool.query('DELETE FROM unit_pricing WHERE unit_id = ?', [unitId]);
+    const discountRules = Array.isArray(body.discount_rules) ? body.discount_rules : [];
+    const holidayRules = Array.isArray(body.holiday_pricing_rules) ? body.holiday_pricing_rules : [];
+    const pricingInserts = [];
+    let sortOrder = 0;
+    for (const rule of discountRules) {
+      if (rule && typeof rule === 'object') {
+        const ruleData = JSON.stringify({
+          id: rule.id,
+          minNights: rule.minNights,
+          discountType: rule.discountType,
+          discountPercent: rule.discountPercent,
+          discountAmount: rule.discountAmount,
+          label: rule.label,
+        });
+        pricingInserts.push([unitId, 'stay_length_discount', ruleData, sortOrder++]);
+      }
+    }
+    for (const rule of holidayRules) {
+      if (rule && typeof rule === 'object') {
+        const ruleData = JSON.stringify({
+          id: rule.id,
+          name: rule.name,
+          startDate: rule.startDate,
+          endDate: rule.endDate,
+          adjustmentType: rule.adjustmentType,
+          adjustmentMode: rule.adjustmentMode,
+          adjustmentPercent: rule.adjustmentPercent,
+          adjustmentAmount: rule.adjustmentAmount,
+        });
+        pricingInserts.push([unitId, 'holiday_pricing', ruleData, sortOrder++]);
+      }
+    }
+    if (pricingInserts.length > 0) {
+      await pool.query(
+        'INSERT INTO unit_pricing (unit_id, pricing_type, rule_data, sort_order) VALUES ?',
+        [pricingInserts]
+      );
+    }
 
     await pool.query('DELETE FROM unit_image WHERE unit_id = ?', [unitId]);
 
@@ -386,7 +480,7 @@ async function updateUnitFull(req, res) {
     }
 
     const [rows] = await pool.query(
-      `SELECT u.unit_id, u.unit_name, u.location, u.city, u.country,
+      `SELECT u.unit_id, u.unit_name, u.tower_building, u.unit_number, u.location, u.city, u.country,
               u.bedroom_count, u.bathroom_count, u.area_sqm, u.unit_type,
               u.description, u.amenities, u.min_pax, u.max_capacity,
               u.base_price, u.excess_pax_fee, u.status, u.is_featured,
@@ -399,11 +493,27 @@ async function updateUnitFull(req, res) {
       'SELECT image_url, is_main FROM unit_image WHERE unit_id = ? ORDER BY is_main DESC, sort_order ASC',
       [unitId]
     );
+    const [pricingRows] = await pool.query(
+      'SELECT pricing_type, rule_data FROM unit_pricing WHERE unit_id = ? ORDER BY sort_order ASC',
+      [unitId]
+    );
+    const discount_rules = [];
+    const holiday_pricing_rules = [];
+    for (const pr of pricingRows) {
+      try {
+        const data = typeof pr.rule_data === 'string' ? JSON.parse(pr.rule_data) : pr.rule_data;
+        const rule = { ...data, id: data.id || `rule-${unitId}-${Date.now()}` };
+        if (pr.pricing_type === 'stay_length_discount') discount_rules.push(rule);
+        else if (pr.pricing_type === 'holiday_pricing') holiday_pricing_rules.push(rule);
+      } catch (_) { /* skip */ }
+    }
 
     const r = rows[0];
     res.json({
       id: String(r.unit_id),
       title: r.unit_name,
+      tower_building: r.tower_building || null,
+      unit_number: r.unit_number || null,
       description: r.description,
       price: Number(r.base_price),
       price_unit: 'night',
@@ -428,6 +538,8 @@ async function updateUnitFull(req, res) {
       check_in_time: r.check_in_time,
       check_out_time: r.check_out_time,
       updated_at: r.updated_at,
+      discount_rules,
+      holiday_pricing_rules,
     });
   } catch (error) {
     console.error('Update unit full error:', error);
@@ -581,6 +693,8 @@ async function createUnit(req, res) {
     const location = body.location != null ? String(body.location) : null;
     const city = body.city != null ? String(body.city) : null;
     const country = body.country != null ? String(body.country) : null;
+    const tower_building = body.tower_building != null ? String(body.tower_building).trim() || null : null;
+    const unit_number = body.unit_number != null ? String(body.unit_number).trim() || null : null;
 
     const bedroomCount = body.bedroom_count != null ? parseInt(body.bedroom_count, 10) : 0;
     if (!Number.isFinite(bedroomCount) || bedroomCount < 0)
@@ -655,13 +769,13 @@ async function createUnit(req, res) {
     // --- Insert unit ---
     const [result] = await pool.query(
       `INSERT INTO unit
-         (unit_name, location, city, country, bedroom_count, bathroom_count,
+         (unit_name, tower_building, unit_number, location, city, country, bedroom_count, bathroom_count,
           area_sqm, unit_type, description, amenities, min_pax, max_capacity,
           base_price, excess_pax_fee, status, is_featured, check_in_time,
           check_out_time, latitude, longitude, owner_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        unit_name.trim(), location, city, country, bedroomCount, bathroomCount,
+        unit_name.trim(), tower_building, unit_number, location, city, country, bedroomCount, bathroomCount,
         areaSqm, unitType, description, amenities, parsedMinPax, parsedMaxCap,
         parsedBasePrice, excessPaxFee, status, isFeatured, checkInTime,
         checkOutTime, latitude, longitude, ownerUserId,
@@ -675,6 +789,45 @@ async function createUnit(req, res) {
       await pool.query(
         'INSERT INTO unit_agent (unit_id, agent_user_id) VALUES ?',
         [uaValues]
+      );
+    }
+
+    const discountRules = Array.isArray(body.discount_rules) ? body.discount_rules : [];
+    const holidayRules = Array.isArray(body.holiday_pricing_rules) ? body.holiday_pricing_rules : [];
+    const pricingInserts = [];
+    let sortOrder = 0;
+    for (const rule of discountRules) {
+      if (rule && typeof rule === 'object') {
+        const ruleData = JSON.stringify({
+          id: rule.id,
+          minNights: rule.minNights,
+          discountType: rule.discountType,
+          discountPercent: rule.discountPercent,
+          discountAmount: rule.discountAmount,
+          label: rule.label,
+        });
+        pricingInserts.push([newUnitId, 'stay_length_discount', ruleData, sortOrder++]);
+      }
+    }
+    for (const rule of holidayRules) {
+      if (rule && typeof rule === 'object') {
+        const ruleData = JSON.stringify({
+          id: rule.id,
+          name: rule.name,
+          startDate: rule.startDate,
+          endDate: rule.endDate,
+          adjustmentType: rule.adjustmentType,
+          adjustmentMode: rule.adjustmentMode,
+          adjustmentPercent: rule.adjustmentPercent,
+          adjustmentAmount: rule.adjustmentAmount,
+        });
+        pricingInserts.push([newUnitId, 'holiday_pricing', ruleData, sortOrder++]);
+      }
+    }
+    if (pricingInserts.length > 0) {
+      await pool.query(
+        'INSERT INTO unit_pricing (unit_id, pricing_type, rule_data, sort_order) VALUES ?',
+        [pricingInserts]
       );
     }
 
@@ -694,7 +847,7 @@ async function createUnit(req, res) {
 
     // --- Return created unit ---
     const [rows] = await pool.query(
-      `SELECT u.unit_id, u.unit_name, u.location, u.city, u.country,
+      `SELECT u.unit_id, u.unit_name, u.tower_building, u.unit_number, u.location, u.city, u.country,
               u.bedroom_count, u.bathroom_count, u.area_sqm, u.unit_type,
               u.description, u.amenities, u.min_pax, u.max_capacity,
               u.base_price, u.excess_pax_fee, u.status, u.is_featured,
@@ -713,6 +866,8 @@ async function createUnit(req, res) {
     res.status(201).json({
       id: String(r.unit_id),
       title: r.unit_name,
+      tower_building: r.tower_building || null,
+      unit_number: r.unit_number || null,
       description: r.description,
       price: Number(r.base_price),
       price_unit: 'night',
