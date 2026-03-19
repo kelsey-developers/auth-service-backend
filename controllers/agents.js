@@ -279,6 +279,9 @@ function mapUnitToResponse(r) {
     amenities: parseJsonArray(r.amenities) || [],
     is_available: r.status === 'available',
     is_featured: Boolean(r.is_featured),
+    min_pax: r.min_pax ? Number(r.min_pax) : null,
+    max_capacity: r.max_capacity != null ? Number(r.max_capacity) : null,
+    excess_pax_fee: r.excess_pax_fee != null ? Number(r.excess_pax_fee) : null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
