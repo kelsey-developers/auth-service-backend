@@ -16,8 +16,10 @@ DROP TABLE IF EXISTS guest_booking_info;
 DROP TABLE IF EXISTS booking;
 DROP TABLE IF EXISTS unit_block_dates;
 DROP TABLE IF EXISTS unit_pricing;
+DROP TABLE IF EXISTS unit_agent;
 DROP TABLE IF EXISTS unit_image;
 DROP TABLE IF EXISTS unit;
+DROP TABLE IF EXISTS user_profile;
 DROP TABLE IF EXISTS user_role;
 DROP TABLE IF EXISTS role;
 DROP TABLE IF EXISTS `user`;
@@ -85,6 +87,29 @@ CREATE TABLE user_role (
 
     CONSTRAINT chk_user_role_status
         CHECK (status IN ('active', 'inactive'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
+-- USER PROFILE (username, about me, contact, social links)
+-- =========================
+CREATE TABLE user_profile (
+    user_profile_id   BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id           BIGINT NOT NULL UNIQUE,
+    username          VARCHAR(50) NOT NULL UNIQUE,
+    about_me          TEXT,
+    contact_info      VARCHAR(255),
+    facebook_url      VARCHAR(500) NULL,
+    instagram_url     VARCHAR(500) NULL,
+    twitter_url       VARCHAR(500) NULL,
+    linkedin_url      VARCHAR(500) NULL,
+    whatsapp_url      VARCHAR(500) NULL,
+    profile_photo_url VARCHAR(500),
+    created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_user_profile_user
+        FOREIGN KEY (user_id) REFERENCES `user`(user_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
@@ -178,6 +203,21 @@ CREATE TABLE unit_image (
 
     CONSTRAINT fk_unit_image_unit
         FOREIGN KEY (unit_id) REFERENCES unit(unit_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Agents assigned to a unit (many-to-many); agents see them on their profile.
+CREATE TABLE unit_agent (
+    unit_id               BIGINT NOT NULL,
+    agent_user_id         BIGINT NOT NULL,
+    created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (unit_id, agent_user_id),
+    CONSTRAINT fk_unit_agent_unit
+        FOREIGN KEY (unit_id) REFERENCES unit(unit_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_unit_agent_agent
+        FOREIGN KEY (agent_user_id) REFERENCES `user`(user_id)
         ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -394,6 +434,9 @@ CREATE TABLE agent_relationship (
 CREATE INDEX idx_user_role_user_id ON user_role(user_id);
 CREATE INDEX idx_user_role_role_id ON user_role(role_id);
 
+CREATE UNIQUE INDEX idx_user_profile_username ON user_profile(username);
+CREATE INDEX idx_user_profile_user_id ON user_profile(user_id);
+
 CREATE INDEX idx_unit_status ON unit(status);
 CREATE INDEX idx_unit_is_featured ON unit(is_featured);
 CREATE INDEX idx_unit_unit_type ON unit(unit_type);
@@ -407,6 +450,8 @@ CREATE INDEX idx_unit_block_dates_dates ON unit_block_dates(start_date, end_date
 
 CREATE INDEX idx_unit_image_unit_id ON unit_image(unit_id);
 CREATE INDEX idx_unit_image_is_main ON unit_image(unit_id, is_main);
+
+CREATE INDEX idx_unit_agent_agent_user_id ON unit_agent(agent_user_id);
 
 CREATE INDEX idx_booking_guest_user_id ON booking(guest_user_id);
 CREATE INDEX idx_booking_guest_booking_info_id ON booking(guest_booking_info_id);
